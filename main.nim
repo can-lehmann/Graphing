@@ -86,6 +86,9 @@ proc lineTo(ctx: CairoContext, pos: Vec2) = ctx.lineTo(pos.x, pos.y)
 proc rectangle(ctx: CairoContext, box: Box2) =
   ctx.rectangle(box.min.x, box.min.y, box.size.x, box.size.y)
 
+proc circle(ctx: CairoContext, pos: Vec2, radius: float64) =
+  ctx.circle(pos.x, pos.y, radius)
+
 # Utilities/Vec2Entry
 
 viewable Vec2Entry:
@@ -134,6 +137,7 @@ const
   TICK_DIST = 70.0
   LABEL_SIZE = 12.0
   GRAPH_LINE_WIDTH = 3.0
+  TRACE_POINT_RADIUS = 5.0
   
   ZOOM_SPEED = 1.5
   SMOOTH_ZOOM_SPEED = 1.01
@@ -515,6 +519,39 @@ type Graph = ref object of RootObj
 method draw(graph: Graph, view: Viewport, ctx: CairoContext) {.base.} = discard
 method view(graph: Graph): Widget {.base.} = discard
 
+# Trace
+
+type Trace = object
+  valid: bool
+  pos: Vec2
+  color: Color
+
+method trace(graph: Graph, pos: Vec2): Trace {.base.} = discard
+
+proc init(_: typedesc[Trace], pos: Vec2, color: Color): Trace =
+  if isNaN(pos.x) or isInf(pos.x) or
+     isNaN(pos.y) or isInf(pos.y):
+    result = Trace(valid: false)
+  else:
+    result = Trace(
+      valid: true,
+      pos: pos,
+      color: color
+    )
+
+proc draw(trace: Trace, view: Viewport, ctx: CairoContext) =
+  if not trace.valid:
+    return
+  
+  let pos = view.map(trace.pos)
+  ctx.moveTo(pos)
+  ctx.circle(pos,TRACE_POINT_RADIUS)
+  ctx.source = trace.color
+  ctx.fill()
+
+
+# Graphs / Function Graph
+
 type FunctionGraph = ref object of Graph
   text: string
   tree: Node
@@ -645,6 +682,18 @@ method view(graph: FunctionGraph): Widget =
                   proc changed(color: Color) =
                     graph.color = color
 
+method trace(graph: FunctionGraph, pos: Vec2): Trace =
+  if graph.tree.isNil:
+    return Trace(valid: false)
+  
+  try:
+    let y = graph.tree.eval(toTable({"x": pos.x}))
+    result = Trace.init(Vec2(x: pos.x, y: y), graph.color)
+  except CatchableError as err:
+    result = Trace(valid: false)
+
+# Graphs / Polar Graph
+
 type PolarGraph = ref object of FunctionGraph
 
 proc new(_: typedesc[PolarGraph],
@@ -683,6 +732,19 @@ method drawPath(graph: PolarGraph, view: Viewport, ctx: CairoContext) =
       isStart = false
     else:
       ctx.lineTo(pos)
+
+method trace(graph: PolarGraph, pos: Vec2): Trace =
+  if graph.tree.isNil:
+    return Trace(valid: false)
+  
+  try:
+    var phi = arctan2(pos.y, pos.x)
+    if phi < 0.0:
+      phi += 2 * PI
+    let r = graph.tree.eval(toTable({"phi": phi}))
+    result = Trace.init(Vec2(x: cos(phi), y: sin(phi)) * r, graph.color)
+  except CatchableError as err:
+    result = Trace(valid: false)
 
 # GraphView
 
@@ -817,6 +879,7 @@ viewable GraphView:
   grid: Grid = Grid.new()
   mouse: Mouse
   viewport: Viewport = Viewport(height: 10.0)
+  tracing: bool
 
 method view(graphView: GraphViewState): Widget =
   result = gui:
@@ -829,6 +892,10 @@ method view(graphView: GraphViewState): Widget =
         
         for graph in graphView.graphs:
           graph.draw(view, ctx)
+        
+        if graphView.tracing:
+          for graph in graphView.graphs:
+            graph.trace(view.mapReverse(graphView.mouse.pos)).draw(view, ctx)
       
       proc mousePressed(event: ButtonEvent): bool =
         if event.button in 0..<graphView.mouse.buttons.len:
@@ -884,11 +951,17 @@ method view(menu: AppMenuState): Widget =
           ModelButton:
             text = "About " & APP_NAME
 
+# Display Options
+
+type DisplayOptions = ref object
+  tracing: bool
+
 # ViewMenu
 
 viewable ViewMenu:
   grid: Grid
   viewport: Viewport
+  options: DisplayOptions
 
 method view(menu: ViewMenuState): Widget =
   result = gui:
@@ -903,6 +976,25 @@ method view(menu: ViewMenuState): Widget =
           orient = OrientY
           margin = 6
           spacing = 6
+          
+          PreferencesGroup:
+            title = "Display"
+            
+            ActionRow:
+              title = "Grid"
+              
+              Switch {.addSuffix.}:
+                state = menu.grid.shown
+                proc changed(state: bool) =
+                  menu.grid.shown = state
+            
+            ActionRow:
+              title = "Tracing"
+              
+              Switch {.addSuffix.}:
+                state = menu.options.tracing
+                proc changed(state: bool) =
+                  menu.options.tracing = state
           
           PreferencesGroup:
             title = "Viewport"
@@ -935,6 +1027,7 @@ viewable App:
   
   grid: Grid = Grid.new()
   viewport: Viewport = Viewport(height: 10.0)
+  displayOptions: DisplayOptions = DisplayOptions()
 
 
 proc findFreeName(graphs: seq[Graph]): string =
@@ -1011,6 +1104,7 @@ method view(app: AppState): Widget =
             ViewMenu {.addRight.}:
               grid = app.grid
               viewport = app.viewport
+              options = app.displayOptions
             
             Button {.addRight.}:
               icon = "zoom-in-symbolic"
@@ -1033,5 +1127,6 @@ method view(app: AppState): Widget =
               graphs = app.graphs
               grid = app.grid
               viewport = app.viewport
+              tracing = app.displayOptions.tracing
 
 adw.brew(gui(App()))
