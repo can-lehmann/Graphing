@@ -17,7 +17,7 @@ $ git clone https://github.com/can-lehmann/Graphing.git
 $ cd Graphing
 $ nimble install owlkettle@#head
 $ nimble install geometrymath
-$ nim compile -r main
+$ nim compile -r -d:adwaita12 main
 ```
 
 ## License
