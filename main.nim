@@ -141,7 +141,10 @@ type
     NodeConst, NodeVar
     NodeAdd, NodeMul,
     NodeNegate, NodeReciprocal,
-    NodePow
+    NodePow,
+    NodeSin, NodeCos, NodeTan,
+    NodeFloor, NodeCeil, NodeAbs,
+    NodeMax, NodeMin
   
   Node = ref object
     children: seq[Node]
@@ -149,6 +152,20 @@ type
       of NodeConst: value: int
       of NodeVar: name: string
       else: discard
+
+const
+  NaryNodes = {
+    NodeAdd, NodeMul,
+    NodeMax, NodeMin
+  }
+  UnaryNodes = {
+    NodeNegate, NodeReciprocal,
+    NodeSin, NodeCos, NodeTan,
+    NodeFloor, NodeCeil, NodeAbs
+  }
+  BinaryNodes = {
+    NodePow
+  }
 
 proc findVariables(node: Node): HashSet[string] =
   case node.kind:
@@ -167,19 +184,29 @@ proc eval[T](node: Node, vars: Table[string, T]): T =
           if node.name notin vars:
             raise newException(ValueError, "Variable undefined")
           vars[node.name]
-    of NodeAdd, NodeMul:
+    of NaryNodes:
       let children = node.children.map(child => child.eval(vars))
       case node.kind:
         of NodeAdd: sum(children)
         of NodeMul: prod(children)
-        else: T(0)
-    of NodeNegate, NodeReciprocal:
+        of NodeMax: max(children)
+        of NodeMin: min(children)
+        else:
+          raise newException(ValueError, "Unreachable")
+    of UnaryNodes:
       let value = node.children[0].eval(vars)
       case node.kind:
         of NodeNegate: -value
         of NodeReciprocal: T(1) / value
-        else: T(0)
-    of NodePow:
+        of NodeSin: sin(value)
+        of NodeCos: cos(value)
+        of NodeTan: tan(value)
+        of NodeFloor: floor(value)
+        of NodeCeil: ceil(value)
+        of NodeAbs: abs(value)
+        else:
+          raise newException(ValueError, "Unreachable")
+    of BinaryNodes:
       let
         a = node.children[0].eval(vars)
         b = node.children[1].eval(vars)
@@ -196,6 +223,17 @@ proc stringify(node: Node, level: int): string =
     NodePow: 6
   ]
   
+  const FUNCTION_NAMES = [
+    NodeSin: "sin",
+    NodeCos: "cos",
+    NodeTan: "tan",
+    NodeFloor: "floor",
+    NodeCeil: "ceil",
+    NodeAbs: "abs",
+    NodeMax: "max",
+    NodeMin: "min"
+  ]
+  
   let terms = node.children.map(child => child.stringify(LEVELS[node.kind] + 1))
   result = case node.kind:
     of NodeConst: $node.value
@@ -205,6 +243,8 @@ proc stringify(node: Node, level: int): string =
     of NodeNegate: "-" & terms[0]
     of NodeReciprocal: "1/" & terms[0]
     of NodePow: terms[0] & " ^ " & terms[1]
+    else:
+      FUNCTION_NAMES[node.kind] & "(" & terms.join(",") & ")"
   
   if LEVELS[node.kind] < level:
     result = "(" & result & ")"
@@ -229,7 +269,8 @@ proc parse(source: string): Node =
     TokenKind = enum
       TokenInt, TokenName,
       TokenOp, TokenPrefixOp,
-      TokenParOpen, TokenParClose
+      TokenParOpen, TokenParClose,
+      TokenComma, TokenSemicolon
     
     Token = object
       kind: TokenKind
@@ -239,6 +280,7 @@ proc parse(source: string): Node =
     const
       OP_CHARS = {'+', '-', '*', '/', '^'}
       WHITESPACE = {' ', '\n', '\t', '\r'}
+      SINGLE_CHAR_TOKENS = {'(', ')', ',', ';'}
     
     var it = 0
     while it < source.len:
@@ -251,8 +293,14 @@ proc parse(source: string): Node =
         of ')':
           result.add(Token(kind: TokenParClose))
           it += 1
+        of ',':
+          result.add(Token(kind: TokenComma))
+          it += 1
+        of ';':
+          result.add(Token(kind: TokenSemicolon))
+          it += 1
         of OP_CHARS:
-          let isPrefix = (it > 0 and source[it - 1] in WHITESPACE + {'('} or it == 0) and
+          let isPrefix = (it > 0 and source[it - 1] in WHITESPACE + {'(', ',', ';'} or it == 0) and
                          it + 1 < source.len and source[it + 1] notin WHITESPACE
           
           var op = ""
@@ -273,7 +321,7 @@ proc parse(source: string): Node =
         else:
           var name = ""
           while it < source.len and
-                source[it] notin OP_CHARS + WHITESPACE + {'(', ')'}:
+                source[it] notin OP_CHARS + WHITESPACE + SINGLE_CHAR_TOKENS:
             name.add(source[it])
             it += 1
           result.add(Token(kind: TokenName, value: name))
@@ -298,7 +346,35 @@ proc parse(source: string): Node =
     if stream.take(TokenInt):
       result = Node(kind: NodeConst, value: stream.value.parseInt())
     elif stream.take(TokenName):
-      result = Node(kind: NodeVar, name: stream.value)
+      let name = stream.value
+      var isFunction = true
+      case name:
+        of "sin": result = Node(kind: NodeSin)
+        of "cos": result = Node(kind: NodeCos)
+        of "tan": result = Node(kind: NodeTan)
+        of "floor": result = Node(kind: NodeFloor)
+        of "ceil": result = Node(kind: NodeCeil)
+        of "abs": result = Node(kind: NodeAbs)
+        of "max": result = Node(kind: NodeMax)
+        of "min": result = Node(kind: NodeMin)
+        else:
+          result = Node(kind: NodeVar, name: name)
+          isFunction = false
+      
+      if isFunction:
+        if not stream.take(TokenParOpen):
+          return nil
+        
+        while true:
+          let arg = stream.parse(0)
+          if arg.isNil:
+            break
+          result.children.add(arg)
+          if not stream.take(TokenComma):
+            break
+        
+        if not stream.take(TokenParClose):
+          return nil
     elif stream.take(TokenParOpen):
       result = stream.parse(0)
       if result.isNil or not stream.take(TokenParClose):
