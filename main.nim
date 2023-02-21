@@ -30,6 +30,9 @@ proc peek[T](hashSet: HashSet[T]): T =
   for item in hashSet:
     return item
 
+proc isInf(x: float): bool =
+  result = x == Inf or x == NegInf
+
 # Utilities/Viewport
 
 type Viewport = ref object
@@ -528,14 +531,22 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
         var screenX = view.map(Vec2()).x mod STEP_SIZE
         if screenX > 0:
           screenX -= STEP_SIZE
+          
+        var isStart = true
         while screenX < view.size.x + STEP_SIZE:
           let
             x = view.mapReverse(Vec2(x: screenX)).x
             y = graph.tree.eval(toTable({"x": x}))
-            pos = view.map(Vec2(x: x, y: y))
           
-          if screenX == 0.0:
+          if isNaN(y) or isInf(y):
+            isStart = true
+            screenX += STEP_SIZE
+            continue
+          
+          let pos = view.map(Vec2(x: x, y: y))
+          if isStart:
             ctx.moveTo(pos)
+            isStart = false
           else:
             ctx.lineTo(pos)
           
@@ -543,14 +554,20 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
       of FunctionPolar:
         const STEPS = 128
         
+        var isStart = true
         for it in 0..STEPS:
           let
             phi = 2.0 * PI * (it / STEPS)
             r = graph.tree.eval(toTable({"phi": phi}))
-            pos = view.map(Vec2(x: cos(phi), y: sin(phi)) * r)
           
-          if it == 0:
+          if isNaN(r) or isInf(r):
+            isStart = true
+            continue
+          
+          let pos = view.map(Vec2(x: cos(phi), y: sin(phi)) * r)
+          if isStart:
             ctx.moveTo(pos)
+            isStart = false
           else:
             ctx.lineTo(pos)
     graph.error = false
