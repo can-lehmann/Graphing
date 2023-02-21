@@ -262,6 +262,9 @@ proc `$`(node: Node): string = node.stringify(0)
 proc new(_: typedesc[Node], kind: NodeKind, children: varargs[Node]): Node =
   result = Node(kind: kind, children: @children)
 
+proc constant(_: typedesc[Node], value: int): Node =
+  result = Node(kind: NodeConst, value: value)
+
 proc `-`(a: Node): Node = Node.new(NodeNegate, a)
 
 proc `+`(a, b: Node): Node = Node.new(NodeAdd, a, b)
@@ -277,7 +280,7 @@ proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
 proc parse(source: string): Node =
   type
     TokenKind = enum
-      TokenInt, TokenName,
+      TokenInt, TokenFractional, TokenName,
       TokenOp, TokenPrefixOp,
       TokenParOpen, TokenParClose,
       TokenComma, TokenSemicolon
@@ -293,6 +296,12 @@ proc parse(source: string): Node =
       SINGLE_CHAR_TOKENS = {'(', ')', ',', ';'}
     
     var it = 0
+    
+    proc readDigits(): string =
+      while it < source.len and (source[it] in '0'..'9' or source[it] == '_'):
+        result.add(source[it])
+        it += 1
+    
     while it < source.len:
       case source[it]:
         of WHITESPACE:
@@ -323,11 +332,12 @@ proc parse(source: string): Node =
           else:
             result.add(Token(kind: TokenOp, value: op))
         of '0'..'9':
-          var value = ""
-          while it < source.len and (source[it] in '0'..'9' or source[it] == '_'):
-            value.add(source[it])
+          result.add(Token(kind: TokenInt, value: readDigits()))
+          if it < source.len and source[it] == '.':
             it += 1
-          result.add(Token(kind: TokenInt, value: value))
+            let frac = readDigits()
+            if frac.len > 0:
+              result.add(Token(kind: TokenFractional, value: frac))
         else:
           var name = ""
           while it < source.len and
@@ -354,7 +364,12 @@ proc parse(source: string): Node =
   
   proc parse(stream: var TokenStream, level: int): Node =
     if stream.take(TokenInt):
-      result = Node(kind: NodeConst, value: stream.value.parseInt())
+      result = Node.constant(stream.value.parseInt())
+      if stream.take(TokenFractional):
+        let
+          num = Node.constant(stream.value.parseInt())
+          den = Node.constant(10 ^ stream.value.len)
+        result = result + num / den
     elif stream.take(TokenName):
       let name = stream.value
       var isFunction = true
