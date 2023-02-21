@@ -499,7 +499,9 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
       of FunctionDefault:
         const STEP_SIZE = 5.0
         
-        var screenX = 0.0
+        var screenX = view.map(Vec2()).x mod STEP_SIZE
+        if screenX > 0:
+          screenX -= STEP_SIZE
         while screenX < view.size.x + STEP_SIZE:
           let
             x = view.mapReverse(Vec2(x: screenX)).x
