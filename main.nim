@@ -506,19 +506,13 @@ type Graph = ref object of RootObj
 method draw(graph: Graph, view: Viewport, ctx: CairoContext) {.base.} = discard
 method view(graph: Graph): Widget {.base.} = discard
 
-type
-  FunctionGraphMode = enum
-    FunctionDefault = "Default",
-    FunctionPolar = "Polar"
+type FunctionGraph = ref object of Graph
+  text: string
+  tree: Node
+  error: bool
   
-  FunctionGraph = ref object of Graph
-    text: string
-    tree: Node
-    mode: FunctionGraphMode
-    error: bool
-    
-    color: Color
-    lineWidth: float
+  color: Color
+  lineWidth: float
 
 proc new(_: typedesc[FunctionGraph],
          name: string,
@@ -534,59 +528,42 @@ proc new(_: typedesc[FunctionGraph],
   if text.len > 0:
     result.tree = text.parse()
 
+method title(graph: FunctionGraph): string {.base.} =
+  result = graph.name & "(x)"
+
+method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.} =
+  const STEP_SIZE = 5.0
+  
+  var screenX = view.map(Vec2()).x mod STEP_SIZE
+  if screenX > 0:
+    screenX -= STEP_SIZE
+    
+  var isStart = true
+  while screenX < view.size.x + STEP_SIZE:
+    let
+      x = view.mapReverse(Vec2(x: screenX)).x
+      y = graph.tree.eval(toTable({"x": x}))
+    
+    if isNaN(y) or isInf(y):
+      isStart = true
+      screenX += STEP_SIZE
+      continue
+    
+    let pos = view.map(Vec2(x: x, y: y))
+    if isStart:
+      ctx.moveTo(pos)
+      isStart = false
+    else:
+      ctx.lineTo(pos)
+    
+    screenX += STEP_SIZE
+
 method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
   if graph.tree.isNil:
     return
   
-  let vars = graph.tree.findVariables()
-  
   try:
-    case graph.mode:
-      of FunctionDefault:
-        const STEP_SIZE = 5.0
-        
-        var screenX = view.map(Vec2()).x mod STEP_SIZE
-        if screenX > 0:
-          screenX -= STEP_SIZE
-          
-        var isStart = true
-        while screenX < view.size.x + STEP_SIZE:
-          let
-            x = view.mapReverse(Vec2(x: screenX)).x
-            y = graph.tree.eval(toTable({"x": x}))
-          
-          if isNaN(y) or isInf(y):
-            isStart = true
-            screenX += STEP_SIZE
-            continue
-          
-          let pos = view.map(Vec2(x: x, y: y))
-          if isStart:
-            ctx.moveTo(pos)
-            isStart = false
-          else:
-            ctx.lineTo(pos)
-          
-          screenX += STEP_SIZE
-      of FunctionPolar:
-        const STEPS = 128
-        
-        var isStart = true
-        for it in 0..STEPS:
-          let
-            phi = 2.0 * PI * (it / STEPS)
-            r = graph.tree.eval(toTable({"phi": phi}))
-          
-          if isNaN(r) or isInf(r):
-            isStart = true
-            continue
-          
-          let pos = view.map(Vec2(x: cos(phi), y: sin(phi)) * r)
-          if isStart:
-            ctx.moveTo(pos)
-            isStart = false
-          else:
-            ctx.lineTo(pos)
+    graph.drawPath(view, ctx)
     graph.error = false
   except CatchableError as err:
     echo err.msg
@@ -599,10 +576,7 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
 method view(graph: FunctionGraph): Widget =
   result = gui:
     EntryRow:
-      title = graph.name & (case graph.mode:
-        of FunctionDefault: "(x)"
-        of FunctionPolar: "(phi)"
-      )
+      title = graph.title()
       text = graph.text
       
       if graph.tree.isNil or graph.error:
@@ -637,14 +611,6 @@ method view(graph: FunctionGraph): Widget =
                   maxWidth = 6
                   proc changed(text: string) =
                     graph.name = text
-              
-              ComboRow:
-                title = "Mode"
-                selected = ord(graph.mode)
-                items = toSeq(low(FunctionGraphMode)..high(FunctionGraphMode)).mapIt($it)
-                
-                proc select(index: int) =
-                  graph.mode = FunctionGraphMode(index)
             
             PreferencesGroup:
               title = "Display"
@@ -669,6 +635,45 @@ method view(graph: FunctionGraph): Widget =
                   useAlpha = true
                   proc changed(color: Color) =
                     graph.color = color
+
+type PolarGraph = ref object of FunctionGraph
+
+proc new(_: typedesc[PolarGraph],
+         name: string,
+         text: string = "",
+         color: Color = COLORS[0],
+         lineWidth: float = GRAPH_LINE_WIDTH): PolarGraph =
+  result = PolarGraph(
+    name: name,
+    text: text,
+    color: color,
+    lineWidth: lineWidth
+  )
+  if text.len > 0:
+    result.tree = text.parse()
+
+method title(graph: PolarGraph): string =
+  result = graph.name & "(phi)"
+
+method drawPath(graph: PolarGraph, view: Viewport, ctx: CairoContext) =
+  const STEPS = 128
+  
+  var isStart = true
+  for it in 0..STEPS:
+    let
+      phi = 2.0 * PI * (it / STEPS)
+      r = graph.tree.eval(toTable({"phi": phi}))
+    
+    if isNaN(r) or isInf(r):
+      isStart = true
+      continue
+    
+    let pos = view.map(Vec2(x: cos(phi), y: sin(phi)) * r)
+    if isStart:
+      ctx.moveTo(pos)
+      isStart = false
+    else:
+      ctx.lineTo(pos)
 
 # GraphView
 
@@ -958,9 +963,19 @@ method view(app: AppState): Widget =
           HeaderBar {.expand: false.}:
             showTitleButtons = false
             
-            Button {.addLeft.}:
+            SplitButton {.addLeft.}:
               icon = "list-add"
               style = {ButtonFlat}
+              
+              PopoverMenu:
+                Box:
+                  orient = OrientY
+                  
+                  ModelButton:
+                    text = "Polar Graph"
+                    proc clicked() =
+                      let name = app.graphs.findFreeName()
+                      app.graphs.add(PolarGraph.new(name, color=sample(COLORS)))
               
               proc clicked() =
                 let name = app.graphs.findFreeName()
