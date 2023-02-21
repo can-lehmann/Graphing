@@ -285,6 +285,8 @@ proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
 # Node / Parser
 
 proc parse(source: string): Node =
+  # Tokenization
+  
   type
     TokenKind = enum
       TokenInt, TokenFractional, TokenName,
@@ -353,6 +355,8 @@ proc parse(source: string): Node =
             it += 1
           result.add(Token(kind: TokenName, value: name))
   
+  # Parsing Utilities
+  
   type TokenStream = object
     tokens: seq[Token]
     cur: int
@@ -369,7 +373,9 @@ proc parse(source: string): Node =
   proc value(stream: TokenStream): string =
     result = stream.tokens[stream.cur - 1].value
   
-  proc parse(stream: var TokenStream, level: int): Node
+  # Grammar
+  
+  proc parse(stream: var TokenStream, level: int, allowPrefix: bool = true): Node
   
   proc parseArguments(stream: var TokenStream): Option[seq[Node]] =
     if not stream.take(TokenParOpen):
@@ -389,7 +395,7 @@ proc parse(source: string): Node =
     
     return some(args)
   
-  proc parse(stream: var TokenStream, level: int): Node =
+  proc parse(stream: var TokenStream, level: int, allowPrefix: bool = true): Node =
     if stream.take(TokenInt):
       result = Node.constant(stream.value.parseInt())
       if stream.take(TokenFractional):
@@ -433,7 +439,7 @@ proc parse(source: string): Node =
       result = stream.parse(0)
       if result.isNil or not stream.take(TokenParClose):
         return nil
-    elif stream.take(TokenPrefixOp):
+    elif allowPrefix and stream.take(TokenPrefixOp):
       result = case stream.value:
         of "+": stream.parse(4)
         of "-":
@@ -448,32 +454,42 @@ proc parse(source: string): Node =
     if result.isNil:
       return nil
     
-    while stream.take(TokenOp):
-      let 
-        op = stream.value
-        opLevel = case op:
-          of "+": 2
-          of "-": 2
-          of "*": 3
-          of "/": 3
-          of "^": 4
+    # Parse operators after value
+    const MUL_LEVEL = 3
+    while stream.next(TokenOp) or level <= MUL_LEVEL:
+      if stream.take(TokenOp):
+        let 
+          op = stream.value
+          opLevel = case op:
+            of "+": 2
+            of "-": 2
+            of "*": MUL_LEVEL
+            of "/": MUL_LEVEL
+            of "^": 4
+            else: return nil
+        
+        if opLevel < level:
+          stream.cur -= 1
+          return
+        
+        let other = stream.parse(opLevel + 1)
+        if other.isNil:
+          return nil
+        
+        result = case op:
+          of "+": result + other
+          of "-": result - other
+          of "*": result * other
+          of "/": result / other
+          of "^": result ^ other
           else: return nil
-      
-      if opLevel < level:
-        stream.cur -= 1
-        return
-      
-      let other = stream.parse(opLevel + 1)
-      if other.isNil:
-        return nil
-      
-      result = case op:
-        of "+": result + other
-        of "-": result - other
-        of "*": result * other
-        of "/": result / other
-        of "^": result ^ other
-        else: return nil
+      else:
+        let other = stream.parse(MUL_LEVEL + 1, allowPrefix = false)
+        if other.isNil:
+          return
+        result = Node.new(NodeMul, result, other)
+  
+  # Tokenize and parse given expression
   
   let tokens = tokenize(source)
   var stream = TokenStream(tokens: tokens)
