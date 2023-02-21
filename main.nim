@@ -161,9 +161,12 @@ proc eval[T](node: Node, vars: Table[string, T]): T =
   case node.kind:
     of NodeConst: T(node.value)
     of NodeVar:
-      if node.name notin vars:
-        raise newException(ValueError, "Variable undefined")
-      vars[node.name]
+      case node.name:
+        of "pi": T(PI) # TODO: Find a better system for constants
+        else:
+          if node.name notin vars:
+            raise newException(ValueError, "Variable undefined")
+          vars[node.name]
     of NodeAdd, NodeMul:
       let children = node.children.map(child => child.eval(vars))
       case node.kind:
@@ -356,12 +359,19 @@ type Graph = ref object of RootObj
 method draw(graph: Graph, view: Viewport, ctx: CairoContext) {.base.} = discard
 method view(graph: Graph): Widget {.base.} = discard
 
-type FunctionGraph = ref object of Graph
-  text: string
-  tree: Node
+type
+  FunctionGraphMode = enum
+    FunctionDefault = "Default",
+    FunctionPolar = "Polar"
   
-  color: Color
-  lineWidth: float
+  FunctionGraph = ref object of Graph
+    text: string
+    tree: Node
+    mode: FunctionGraphMode
+    error: bool
+    
+    color: Color
+    lineWidth: float
 
 proc new(_: typedesc[FunctionGraph],
          name: string,
@@ -383,19 +393,39 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
   
   let vars = graph.tree.findVariables()
   
-  var screenX = 0.0
-  while screenX < view.size.x:
-    let
-      x = view.mapReverse(Vec2(x: screenX)).x
-      y = graph.tree.eval(toTable({"x": x}))
-      pos = view.map(Vec2(x: x, y: y))
-    
-    if screenX == 0.0:
-      ctx.moveTo(pos)
-    else:
-      ctx.lineTo(pos)
-    
-    screenX += 10.0
+  try:
+    case graph.mode:
+      of FunctionDefault:
+        var screenX = 0.0
+        while screenX < view.size.x:
+          let
+            x = view.mapReverse(Vec2(x: screenX)).x
+            y = graph.tree.eval(toTable({"x": x}))
+            pos = view.map(Vec2(x: x, y: y))
+          
+          if screenX == 0.0:
+            ctx.moveTo(pos)
+          else:
+            ctx.lineTo(pos)
+          
+          screenX += 10.0
+      of FunctionPolar:
+        const STEPS = 128
+        
+        for it in 0..STEPS:
+          let
+            phi = 2.0 * PI * (it / STEPS)
+            r = graph.tree.eval(toTable({"phi": phi}))
+            pos = view.map(Vec2(x: cos(phi), y: sin(phi)) * r)
+          
+          if it == 0:
+            ctx.moveTo(pos)
+          else:
+            ctx.lineTo(pos)
+    graph.error = false
+  except CatchableError as err:
+    echo err.msg
+    graph.error = true
   
   ctx.source = graph.color
   ctx.lineWidth = graph.lineWidth
@@ -404,13 +434,16 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
 method view(graph: FunctionGraph): Widget =
   result = gui:
     EntryRow:
-      title = graph.name & "(x)"
+      title = graph.name & (case graph.mode:
+        of FunctionDefault: "(x)"
+        of FunctionPolar: "(phi)"
+      )
       text = graph.text
       
-      if not graph.tree.isNil:
-        style = {}
-      else:
+      if graph.tree.isNil or graph.error:
         style = {EntryError}
+      else:
+        style = {}
       
       proc changed(text: string) =
         graph.text = text
@@ -439,6 +472,14 @@ method view(graph: FunctionGraph): Widget =
                   maxWidth = 6
                   proc changed(text: string) =
                     graph.name = text
+              
+              ComboRow:
+                title = "Mode"
+                selected = ord(graph.mode)
+                items = toSeq(low(FunctionGraphMode)..high(FunctionGraphMode)).mapIt($it)
+                
+                proc select(index: int) =
+                  graph.mode = FunctionGraphMode(index)
             
             PreferencesGroup:
               title = "Display"
