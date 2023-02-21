@@ -131,6 +131,7 @@ const
   GRID_WIDTH = 2.0
   AXIS_WIDTH = 2.0
   TICK_SIZE = 3.0
+  TICK_DIST = 70.0
   LABEL_SIZE = 12.0
   GRAPH_LINE_WIDTH = 3.0
   
@@ -675,7 +676,6 @@ method view(graph: FunctionGraph): Widget =
 
 type Grid = ref object
   shown: bool
-  size: Vec2
   
   backgroundColor: Color
   gridColor: Color
@@ -684,11 +684,25 @@ type Grid = ref object
 proc new(_: typedesc[Grid]): Grid =
   result = Grid(
     shown: true,
-    size: Vec2(x: 1, y: 1),
     backgroundColor: BACKGROUND_COLOR,
     gridColor: GRID_COLOR,
     axisColor: AXIS_COLOR
   )
+
+proc guessGridSize(view: Viewport): Vec2 =
+  let
+    tickCount = floor(view.size / TICK_DIST)
+    optimalSize = view.region.size / tickCount
+    magnitude = pow(10.0, floor(log10(optimalSize.x)))
+  
+  var minDelta = Inf
+  for factor in [1, 2, 5]:
+    let
+      size = magnitude * float(factor)
+      delta = abs(size - optimalSize.x)
+    if delta < minDelta:
+      result = Vec2(x: size, y: size)
+      minDelta = delta
 
 proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
   ctx.rectangle(Box2(max: view.size))
@@ -697,17 +711,18 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
   
   if grid.shown:
     let
-      min = floor(view.region.min / grid.size).toIndex2()
-      max = ceil(view.region.max / grid.size).toIndex2()
+      size = guessGridSize(view)
+      min = floor(view.region.min / size).toIndex2()
+      max = ceil(view.region.max / size).toIndex2()
     
     block backgroundGrid:
       for x in min.x..max.x:
-        let pos = view.map(Vec2(x: float(x) * grid.size.x))
+        let pos = view.map(Vec2(x: float(x) * size.x))
         ctx.moveTo(pos.dup(y = 0))
         ctx.lineTo(pos.dup(y = view.size.y))
       
       for y in min.y..max.y:
-        let pos = view.map(Vec2(y: float(y) * grid.size.y))
+        let pos = view.map(Vec2(y: float(y) * size.y))
         ctx.moveTo(pos.dup(x = 0))
         ctx.lineTo(pos.dup(x = view.size.x))
       
@@ -730,12 +745,12 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
     
     block ticks:
       for x in min.x..max.x:
-        let pos = view.map(Vec2(x: float(x) * grid.size.x))
+        let pos = view.map(Vec2(x: float(x) * size.x))
         ctx.moveTo(pos + Vec2(y: -TICK_SIZE))
         ctx.lineTo(pos + Vec2(y: TICK_SIZE))
       
       for y in min.y..max.y:
-        let pos = view.map(Vec2(y: float(y) * grid.size.y))
+        let pos = view.map(Vec2(y: float(y) * size.y))
         ctx.moveTo(pos + Vec2(x: -TICK_SIZE))
         ctx.lineTo(pos + Vec2(x: TICK_SIZE))
       
@@ -750,8 +765,8 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
         if x == 0:
           continue
         let
-          pos = view.map(Vec2(x: float(x) * grid.size.x))
-          label = fmt"{float(x) * grid.size.x:.1f}"
+          pos = view.map(Vec2(x: float(x) * size.x))
+          label = fmt"{float(x) * size.x:.1f}"
           width = ctx.textExtents(label).width.float
         ctx.moveTo(pos + Vec2(x: -width / 2, y: TICK_SIZE + LABEL_SIZE))
         ctx.text(label)
@@ -760,8 +775,8 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
         if y == 0:
           continue
         let
-          pos = view.map(Vec2(y: float(y) * grid.size.y))
-          label = fmt"{float(y) * grid.size.y:.1f}"
+          pos = view.map(Vec2(y: float(y) * size.y))
+          label = fmt"{float(y) * size.y:.1f}"
           height = ctx.textExtents(label).height.float
         ctx.moveTo(pos + Vec2(x: TICK_SIZE * 2, y: height / 2))
         ctx.text(label)
@@ -890,38 +905,6 @@ method view(menu: ViewMenuState): Widget =
                 
                 proc changed(value: float) =
                   menu.viewport.height = value
-          
-          PreferencesGroup:
-            title = "Grid"
-            
-            Box {.addSuffix.}:
-              Switch {.expand: false, vAlign: AlignCenter.}:
-                state = menu.grid.shown
-                
-                proc changed(state: bool) =
-                  menu.grid.shown = state
-            
-            ActionRow:
-              title = "Width"
-              
-              NumberEntry {.addSuffix.}:
-                value = menu.grid.size.x
-                xAlign = 1.0
-                maxWidth = 6
-                
-                proc changed(value: float) =
-                  menu.grid.size.x = value
-            
-            ActionRow:
-              title = "Height"
-              
-              NumberEntry {.addSuffix.}:
-                value = menu.grid.size.y
-                xAlign = 1.0
-                maxWidth = 6
-                
-                proc changed(value: float) =
-                  menu.grid.size.y = value
 
 # Main Application
 
