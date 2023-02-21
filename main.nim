@@ -152,7 +152,7 @@ type
     NodeConst, NodeVar
     NodeAdd, NodeMul,
     NodeNegate, NodeReciprocal,
-    NodePow,
+    NodePow, NodeMod,
     NodeSin, NodeCos, NodeTan,
     NodeFloor, NodeCeil, NodeAbs,
     NodeMax, NodeMin,
@@ -177,7 +177,7 @@ const
     NodeLn
   }
   BinaryNodes = {
-    NodePow
+    NodePow, NodeMod
   }
 
 proc findVariables(node: Node): HashSet[string] =
@@ -225,7 +225,11 @@ proc eval[T](node: Node, vars: Table[string, T]): T =
       let
         a = node.children[0].eval(vars)
         b = node.children[1].eval(vars)
-      pow(a, b)
+      case node.kind:
+        of NodePow: pow(a, b)
+        of NodeMod: a mod b
+        else:
+          raise newException(ValueError, "Unreachable")
 
 proc stringify(node: Node, level: int): string =
   const LEVELS = [
@@ -235,7 +239,8 @@ proc stringify(node: Node, level: int): string =
     NodeMul: 3,
     NodeNegate: 4,
     NodeReciprocal: 5,
-    NodePow: 6
+    NodePow: 6,
+    NodeMod: 3
   ]
   
   const FUNCTION_NAMES = [
@@ -259,6 +264,7 @@ proc stringify(node: Node, level: int): string =
     of NodeNegate: "-" & terms[0]
     of NodeReciprocal: "1/" & terms[0]
     of NodePow: terms[0] & " ^ " & terms[1]
+    of NodeMod: terms[0] & " % " & terms[1]
     else:
       FUNCTION_NAMES[node.kind] & "(" & terms.join(",") & ")"
   
@@ -280,6 +286,7 @@ proc `-`(a, b: Node): Node = Node.new(NodeAdd, a, -b)
 proc `*`(a, b: Node): Node = Node.new(NodeMul, a, b)
 proc `/`(a, b: Node): Node = Node.new(NodeMul, a, Node.new(NodeReciprocal, b))
 proc `^`(a, b: Node): Node = Node.new(NodePow, a, b)
+proc `mod`(a, b: Node): Node = Node.new(NodeMod, a, b)
 
 proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
 
@@ -301,7 +308,7 @@ proc parse(source: string): Node =
   
   proc tokenize(source: string): seq[Token] =
     const
-      OP_CHARS = {'+', '-', '*', '/', '^'}
+      OP_CHARS = {'+', '-', '*', '/', '^', '%'}
       WHITESPACE = {' ', '\n', '\t', '\r'}
       SINGLE_CHAR_TOKENS = {'(', ')', ',', ';'}
     
@@ -467,6 +474,7 @@ proc parse(source: string): Node =
             of "*": MUL_LEVEL
             of "/": MUL_LEVEL
             of "^": 4
+            of "%": MUL_LEVEL
             else: return nil
         
         if opLevel < level:
@@ -483,6 +491,7 @@ proc parse(source: string): Node =
           of "*": result * other
           of "/": result / other
           of "^": result ^ other
+          of "%": result mod other
           else: return nil
       else:
         let other = stream.parse(MUL_LEVEL + 1, allowPrefix = false)
