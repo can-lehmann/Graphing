@@ -689,11 +689,14 @@ proc new(_: typedesc[Grid]): Grid =
     axisColor: AXIS_COLOR
   )
 
-proc guessGridSize(view: Viewport): Vec2 =
+proc guessGridSize(view: Viewport): tuple[precision: int, size: Vec2] =
   let
     tickCount = floor(view.size / TICK_DIST)
     optimalSize = view.region.size / tickCount
-    magnitude = pow(10.0, floor(log10(optimalSize.x)))
+    precision = floor(log10(optimalSize.x))
+    magnitude = pow(10.0, precision)
+  
+  result.precision = max(-int(precision), 0)
   
   var minDelta = Inf
   for factor in [1, 2, 5]:
@@ -701,8 +704,11 @@ proc guessGridSize(view: Viewport): Vec2 =
       size = magnitude * float(factor)
       delta = abs(size - optimalSize.x)
     if delta < minDelta:
-      result = Vec2(x: size, y: size)
+      result.size = Vec2(x: size, y: size)
       minDelta = delta
+
+proc formatLabel(value: float, precision: int): string =
+  result.formatValue(value, "." & $max(1, precision) & "f")
 
 proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
   ctx.rectangle(Box2(max: view.size))
@@ -711,7 +717,7 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
   
   if grid.shown:
     let
-      size = guessGridSize(view)
+      (precision, size) = guessGridSize(view)
       min = floor(view.region.min / size).toIndex2()
       max = ceil(view.region.max / size).toIndex2()
     
@@ -766,7 +772,7 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
           continue
         let
           pos = view.map(Vec2(x: float(x) * size.x))
-          label = fmt"{float(x) * size.x:.1f}"
+          label = formatLabel(float(x) * size.x, precision)
           width = ctx.textExtents(label).width.float
         ctx.moveTo(pos + Vec2(x: -width / 2, y: TICK_SIZE + LABEL_SIZE))
         ctx.text(label)
@@ -776,7 +782,7 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
           continue
         let
           pos = view.map(Vec2(y: float(y) * size.y))
-          label = fmt"{float(y) * size.y:.1f}"
+          label = formatLabel(float(y) * size.y, precision)
           height = ctx.textExtents(label).height.float
         ctx.moveTo(pos + Vec2(x: TICK_SIZE * 2, y: height / 2))
         ctx.text(label)
