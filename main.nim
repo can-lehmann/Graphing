@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import std/[tables, sets, sequtils, sugar, math, strformat, strutils]
+import std/[tables, sets, sequtils, sugar, math, strformat, strutils, random]
 import owlkettle, owlkettle/[adw, cairo, dataentries]
 import geometrymath
 
@@ -133,6 +133,13 @@ const
   
   ZOOM_SPEED = 1.5
   SMOOTH_ZOOM_SPEED = 1.01
+  
+  COLORS = [
+    Color.rgb(0x1c71d8), # Blue
+    Color.rgb(0x2ec27e), # Green
+    Color.rgb(0xe66100), # Orange
+    Color.rgb(0xe01b24), # Red
+  ]
 
 # Node
 
@@ -180,6 +187,7 @@ proc eval[T](node: Node, vars: Table[string, T]): T =
     of NodeVar:
       case node.name:
         of "pi": T(PI) # TODO: Find a better system for constants
+        of "e": T(E)
         else:
           if node.name notin vars:
             raise newException(ValueError, "Variable undefined")
@@ -263,6 +271,8 @@ proc `/`(a, b: Node): Node = Node.new(NodeMul, a, Node.new(NodeReciprocal, b))
 proc `^`(a, b: Node): Node = Node.new(NodePow, a, b)
 
 proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
+
+# Node / Parser
 
 proc parse(source: string): Node =
   type
@@ -451,17 +461,17 @@ type
 
 proc new(_: typedesc[FunctionGraph],
          name: string,
-         tree: Node = nil,
-         color: Color = Color.rgb(1.0, 0.0, 0.0),
+         text: string = "",
+         color: Color = COLORS[0],
          lineWidth: float = GRAPH_LINE_WIDTH): FunctionGraph =
   result = FunctionGraph(
     name: name,
-    tree: tree,
+    text: text,
     color: color,
     lineWidth: lineWidth
   )
-  if not tree.isNil:
-    result.text = $tree
+  if text.len > 0:
+    result.tree = text.parse()
 
 method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
   if graph.tree.isNil:
@@ -472,8 +482,10 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
   try:
     case graph.mode:
       of FunctionDefault:
+        const STEP_SIZE = 5.0
+        
         var screenX = 0.0
-        while screenX < view.size.x:
+        while screenX < view.size.x + STEP_SIZE:
           let
             x = view.mapReverse(Vec2(x: screenX)).x
             y = graph.tree.eval(toTable({"x": x}))
@@ -484,7 +496,7 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
           else:
             ctx.lineTo(pos)
           
-          screenX += 10.0
+          screenX += STEP_SIZE
       of FunctionPolar:
         const STEPS = 128
         
@@ -839,7 +851,7 @@ method view(menu: ViewMenuState): Widget =
 
 viewable App:
   graphs: seq[Graph] = @[
-    Graph FunctionGraph.new("f")
+    Graph FunctionGraph.new("f", "x ^ 2")
   ]
   
   grid: Grid = Grid.new()
@@ -887,7 +899,7 @@ method view(app: AppState): Widget =
               
               proc clicked() =
                 let name = app.graphs.findFreeName()
-                app.graphs.add(FunctionGraph.new(name))
+                app.graphs.add(FunctionGraph.new(name, color=sample(COLORS)))
           
           ScrolledWindow:
             PreferencesGroup:
