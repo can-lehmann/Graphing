@@ -9,7 +9,8 @@ A simple graphing application built with owlkettle.
 - Basic graphing
 - Interactive viewport
 - Polar Plots
-- Supported Functions: `sin`, `cos`, `tan`, `floor`, `ceil`, `abs`, `max`, `min`
+- Supported Functions: `sin`, `cos`, `tan`, `floor`, `ceil`, `abs`, `max`, `min`, `sqrt`, `cbrt`, `ln`
+- Constants: `pi`, `e`
 
 ## Installation
 

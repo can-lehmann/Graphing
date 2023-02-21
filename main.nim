@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import std/[tables, sets, sequtils, sugar, math, strformat, strutils, random]
+import std/[tables, sets, sequtils, sugar, math, strformat, strutils, random, options]
 import owlkettle, owlkettle/[adw, cairo, dataentries]
 import geometrymath
 
@@ -151,7 +151,8 @@ type
     NodePow,
     NodeSin, NodeCos, NodeTan,
     NodeFloor, NodeCeil, NodeAbs,
-    NodeMax, NodeMin
+    NodeMax, NodeMin,
+    NodeLn
   
   Node = ref object
     children: seq[Node]
@@ -168,7 +169,8 @@ const
   UnaryNodes = {
     NodeNegate, NodeReciprocal,
     NodeSin, NodeCos, NodeTan,
-    NodeFloor, NodeCeil, NodeAbs
+    NodeFloor, NodeCeil, NodeAbs,
+    NodeLn
   }
   BinaryNodes = {
     NodePow
@@ -212,6 +214,7 @@ proc eval[T](node: Node, vars: Table[string, T]): T =
         of NodeFloor: floor(value)
         of NodeCeil: ceil(value)
         of NodeAbs: abs(value)
+        of NodeLn: ln(value)
         else:
           raise newException(ValueError, "Unreachable")
     of BinaryNodes:
@@ -239,7 +242,8 @@ proc stringify(node: Node, level: int): string =
     NodeCeil: "ceil",
     NodeAbs: "abs",
     NodeMax: "max",
-    NodeMin: "min"
+    NodeMin: "min",
+    NodeLn: "ln"
   ]
   
   let terms = node.children.map(child => child.stringify(LEVELS[node.kind] + 1))
@@ -362,6 +366,26 @@ proc parse(source: string): Node =
   proc value(stream: TokenStream): string =
     result = stream.tokens[stream.cur - 1].value
   
+  proc parse(stream: var TokenStream, level: int): Node
+  
+  proc parseArguments(stream: var TokenStream): Option[seq[Node]] =
+    if not stream.take(TokenParOpen):
+      return none(seq[Node])
+    
+    var args: seq[Node] = @[]
+    while true:
+      let arg = stream.parse(0)
+      if arg.isNil:
+        break
+      args.add(arg)
+      if not stream.take(TokenComma):
+        break
+    
+    if not stream.take(TokenParClose):
+      return none(seq[Node])
+    
+    return some(args)
+  
   proc parse(stream: var TokenStream, level: int): Node =
     if stream.take(TokenInt):
       result = Node.constant(stream.value.parseInt())
@@ -382,24 +406,26 @@ proc parse(source: string): Node =
         of "abs": result = Node(kind: NodeAbs)
         of "max": result = Node(kind: NodeMax)
         of "min": result = Node(kind: NodeMin)
+        of "sqrt", "cbrt":
+          isFunction = false
+          let args = stream.parseArguments()
+          if args.isNone or args.get().len != 1:
+            return nil
+          let nth = if name == "sqrt": 2 else: 3
+          result = Node.new(NodePow,
+            args.get()[0],
+            Node.new(NodeReciprocal, Node.constant(nth))
+          )
+        of "ln": result = Node(kind: NodeLn)
         else:
           result = Node(kind: NodeVar, name: name)
           isFunction = false
       
       if isFunction:
-        if not stream.take(TokenParOpen):
+        let args = stream.parseArguments()
+        if args.isNone:
           return nil
-        
-        while true:
-          let arg = stream.parse(0)
-          if arg.isNil:
-            break
-          result.children.add(arg)
-          if not stream.take(TokenComma):
-            break
-        
-        if not stream.take(TokenParClose):
-          return nil
+        result.children = args.get()
     elif stream.take(TokenParOpen):
       result = stream.parse(0)
       if result.isNil or not stream.take(TokenParClose):
