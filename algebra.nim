@@ -385,7 +385,8 @@ proc parse*(source: string): Node =
 # Tests
 
 when isMainModule:
-  proc equals(a, b: Node,
+  proc equals(a: Node,
+              b: proc(x: float): float,
               domain: HSlice[float, float] = -10.0..10.0,
               steps: int = 10,
               eps: float = 0.0001): bool =
@@ -393,12 +394,134 @@ when isMainModule:
       let
         x = domain.a + (domain.b - domain.a) * (it / (steps - 1))
         valueA = a.eval(toTable({"x": x}))
-        valueB = b.eval(toTable({"x": x}))
+        valueB = b(x)
       if abs(valueA - valueB) > eps:
         return false
     return true
   
-  assert equals(parse("2 * 3 + 1"), Node.constant(7))
-  assert equals(parse("1 + 2 * 3"), Node.constant(7))
-  assert equals(parse("(1 + 2) * 3"), Node.constant(9))
-  assert equals(parse("2 * (3 + 1)"), Node.constant(8))
+  proc equals(a, b: Node,
+              domain: HSlice[float, float] = -10.0..10.0,
+              steps: int = 10,
+              eps: float = 0.0001): bool =
+    result = equals(a, x => b.eval(toTable({"x": x})),
+      domain = domain,
+      steps = steps,
+      eps = eps
+    )
+  
+  proc equals(a: Node,
+              b: float,
+              eps: float = 0.0001): bool =
+    result = equals(a, x => b,
+      domain = 0.0..0.0,
+      steps = 1,
+      eps = eps
+    )
+  
+  
+  # Tests / Operator Precedence
+  
+  assert equals(parse("2 * 3 + 1"), 7)
+  assert equals(parse("1 + 2 * 3"), 7)
+  assert equals(parse("(1 + 2) * 3"), 9)
+  assert equals(parse("2 * (3 + 1)"), 8)
+  
+  assert equals(parse("2 3 + 1"), 7)
+  assert equals(parse("1 + 2 3"), 7)
+  assert equals(parse("(1 + 2)3"), 9)
+  assert equals(parse("2(3 + 1)"), 8)
+  
+  assert equals(parse("1/2(3+4)"), 3.5)
+  assert equals(parse("1 + 2 * 4 - 3 * 4"), -3)
+  
+  # Tests / Pow
+  
+  assert equals(parse("2^4"), 16)
+  assert equals(parse("x^2"), parse("x * x"))
+  assert equals(parse("x^3"), parse("x * x * x"))
+  assert equals(parse("e^x"), x => exp(x))
+  
+  # Tests / Mod
+  
+  assert equals(parse("6 % 4"), 2)
+  assert equals(parse("-6 % 4"), -2)
+  
+  # Tests / Sin
+  
+  assert equals(parse("sin(x)"), sin)
+  assert equals(parse("sin(0)"), 0)
+  assert equals(parse("sin(pi / 2)"), 1)
+  assert equals(parse("sin(pi)"), 0)
+  assert equals(parse("sin(3/2 pi)"), -1)
+  assert equals(parse("sin(2pi)"), 0)
+  assert equals(parse("sin(2pi + x)"), parse("sin(x)"))
+  
+  # Tests / Cos
+  
+  assert equals(parse("cos(x)"), cos)
+  assert equals(parse("cos(0)"), 1)
+  assert equals(parse("cos(pi / 2)"), 0)
+  assert equals(parse("cos(pi)"), -1)
+  assert equals(parse("cos(3/2 pi)"), 0)
+  assert equals(parse("cos(2pi)"), 1)
+  assert equals(parse("cos(2pi + x)"), parse("cos(x)"))
+  
+  # Tests / Tan
+  
+  assert equals(parse("tan(x)"), tan)
+  
+  # Tests / Floor
+  
+  assert equals(parse("floor(x)"), floor)
+  assert equals(parse("floor(1.2)"), 1)
+  assert equals(parse("floor(1.0)"), 1)
+  assert equals(parse("floor(0.8)"), 0)
+  assert equals(parse("floor(0)"), 0)
+  assert equals(parse("floor(-1.2)"), -2)
+  
+  # Tests / Ceil
+  
+  assert equals(parse("ceil(x)"), ceil)
+  assert equals(parse("ceil(1.2)"), 2)
+  assert equals(parse("ceil(1.0)"), 1)
+  assert equals(parse("ceil(0.8)"), 1)
+  assert equals(parse("ceil(0)"), 0)
+  assert equals(parse("ceil(-1.2)"), -1)
+  
+  # Tests / Abs
+  
+  assert equals(parse("abs(x)"), x => abs(x))
+  assert equals(parse("abs(10)"), 10)
+  assert equals(parse("abs(-10)"), 10)
+  
+  # Tests / Max
+  
+  assert equals(parse("max(0, x)"), x => max(0, x))
+  assert equals(parse("max(1, 2)"), 2)
+  assert equals(parse("max(-x, x)"), parse("abs(x)"))
+  assert equals(parse("max(1)"), 1)
+  assert equals(parse("max(1, 3, 2)"), 3)
+  
+  # Tests / Min
+  
+  assert equals(parse("min(0, x)"), x => min(0, x))
+  assert equals(parse("min(1, 2)"), 1)
+  assert equals(parse("min(-x, x)"), parse("-abs(x)"))
+  assert equals(parse("min(1)"), 1)
+  assert equals(parse("min(1, 3, -2)"), -2)
+  
+  # Tests / Ln
+  
+  assert equals(parse("ln(x)"), ln, domain=0.1..10.0)
+  assert equals(parse("ln(1)"), 0)
+  assert equals(parse("ln(e)"), 1)
+  assert equals(parse("ln(e ^ 2)"), 2)
+  assert equals(parse("e^ln(x)"), x => x, domain=0.1..10.0)
+  assert equals(parse("ln(x^2)"), parse("2 ln(x)"), domain=0.1..10.0)
+  
+  # Tests / Polynomial
+  
+  assert equals(parse("5x^2 - x + 1"), x => 5 * x^2 - x + 1)
+  assert equals(parse("-5x^2 x + 3x - 2"), x => -5 * x^3 + 3 * x - 2)
+  assert equals(parse("(x + 1)(x - 1)"), x => x^2 - 1)
+  assert equals(parse("(x + 2)(x - 3)^2"), x => (x + 2) * (x - 3)^2)
