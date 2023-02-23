@@ -23,6 +23,22 @@
 import std/[math, sets, tables, sequtils, strutils, sugar, options]
 
 type
+  TypeKind = enum
+    TypeNumber, TypeFunction, TypeTuple
+  
+  Type = ref object
+    case kind: TypeKind:
+      of TypeNumber: discard
+      of TypeFunction:
+        args: Option[seq[Type]]
+        res: Type
+      of TypeTuple:
+        fields: Option[seq[Type]]
+
+proc isKind(typ: Type, kind: TypeKind): bool =
+  result = not typ.isNil and typ.kind == kind
+
+type
   NodeKind = enum
     NodeConst, NodeVar
     NodeAdd, NodeMul,
@@ -31,13 +47,18 @@ type
     NodeSin, NodeCos, NodeTan,
     NodeFloor, NodeCeil, NodeAbs,
     NodeMax, NodeMin,
-    NodeLn
+    NodeLn,
+    NodeCall
+    NodeLambda
+    NodeTuple
   
   Node* = ref object
+    typeHint: Type
     children: seq[Node]
     case kind: NodeKind:
       of NodeConst: value: int
       of NodeVar: name: string
+      of NodeLambda: args: seq[string]
       else: discard
 
 const
@@ -62,49 +83,98 @@ proc findVariables(node: Node): HashSet[string] =
       for child in node.children:
         result = result.union(child.findVariables())
 
-proc eval*[T](node: Node, vars: Table[string, T]): T =
+type
+  ValueKind = enum
+    ValueNumber, ValueFunction, ValueTuple
+  
+  Value*[T] = object
+    case kind: ValueKind:
+      of ValueNumber:
+        number: T
+      of ValueFunction:
+        args: seq[string]
+        body: Node
+        closure: Table[string, Value[T]]
+      of ValueTuple:
+        fields: seq[Value[T]]
+
+proc asNumber*[T](value: Value[T]): T =
+  if value.kind != ValueNumber:
+    raise newException(ValueError, "Value is not a number")
+  result = value.number
+
+proc initNumber*[T](_: typedesc[Value[T]], number: T): Value[T] =
+  result = Value[T](kind: ValueNumber, number: number)
+
+proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
   case node.kind:
-    of NodeConst: T(node.value)
+    of NodeConst: Value[T].initNumber(T(node.value))
     of NodeVar:
       case node.name:
-        of "pi": T(PI) # TODO: Find a better system for constants
-        of "e": T(E)
+        of "pi": Value.initNumber(T(PI)) # TODO: Find a better system for constants
+        of "e": Value.initNumber(T(E))
         else:
           if node.name notin vars:
             raise newException(ValueError, "Variable undefined")
           vars[node.name]
     of NaryNodes:
-      let children = node.children.map(child => child.eval(vars))
-      case node.kind:
-        of NodeAdd: sum(children)
-        of NodeMul: prod(children)
-        of NodeMax: max(children)
-        of NodeMin: min(children)
-        else:
-          raise newException(ValueError, "Unreachable")
+      let
+        children = node.children.map(child => child.eval(vars).asNumber())
+        res = case node.kind:
+          of NodeAdd: sum(children)
+          of NodeMul: prod(children)
+          of NodeMax: max(children)
+          of NodeMin: min(children)
+          else:
+            raise newException(ValueError, "Unreachable")
+      Value.initNumber(res)
     of UnaryNodes:
-      let value = node.children[0].eval(vars)
-      case node.kind:
-        of NodeNegate: -value
-        of NodeReciprocal: T(1) / value
-        of NodeSin: sin(value)
-        of NodeCos: cos(value)
-        of NodeTan: tan(value)
-        of NodeFloor: floor(value)
-        of NodeCeil: ceil(value)
-        of NodeAbs: abs(value)
-        of NodeLn: ln(value)
-        else:
-          raise newException(ValueError, "Unreachable")
+      let
+        value = node.children[0].eval(vars).asNumber()
+        res = case node.kind:
+          of NodeNegate: -value
+          of NodeReciprocal: T(1) / value
+          of NodeSin: sin(value)
+          of NodeCos: cos(value)
+          of NodeTan: tan(value)
+          of NodeFloor: floor(value)
+          of NodeCeil: ceil(value)
+          of NodeAbs: abs(value)
+          of NodeLn: ln(value)
+          else:
+            raise newException(ValueError, "Unreachable")
+      Value.initNumber(res)
     of BinaryNodes:
       let
-        a = node.children[0].eval(vars)
-        b = node.children[1].eval(vars)
+        a = node.children[0].eval(vars).asNumber()
+        b = node.children[1].eval(vars).asNumber()
       case node.kind:
-        of NodePow: pow(a, b)
-        of NodeMod: a mod b
+        of NodePow: Value.initNumber(pow(a, b))
+        of NodeMod: Value.initNumber(a mod b)
         else:
           raise newException(ValueError, "Unreachable")
+    of NodeCall:
+      let
+        callee = node.children[0].eval(vars)
+        args = node.children[1..^1].map(arg => arg.eval(vars))
+      
+      if callee.kind != ValueFunction:
+        raise newException(ValueError, "Unable to call " & $callee.kind)
+      
+      var env = callee.closure
+      for it, arg in args:
+        env[callee.args[it]] = arg
+      
+      callee.body.eval(env)
+    of NodeTuple:
+      let fields = node.children.map(child => child.eval(vars))
+      Value[T](kind: ValueTuple, fields: fields)
+    of NodeLambda:
+      Value[T](kind: ValueFunction,
+        args: node.args,
+        body: node.children[0],
+        closure: vars
+      )
 
 proc stringify(node: Node, level: int): string =
   const LEVELS = [
@@ -140,6 +210,13 @@ proc stringify(node: Node, level: int): string =
     of NodeReciprocal: "1/" & terms[0]
     of NodePow: terms[0] & " ^ " & terms[1]
     of NodeMod: terms[0] & " % " & terms[1]
+    of NodeCall:
+      terms[0] & "(" & terms[1..^1].join(",") & ")"
+    of NodeTuple:
+      if terms.len == 1:
+        "(" & terms[0] & ",)"
+      else:
+        "(" & terms.join(",") & ")"
     else:
       FUNCTION_NAMES[node.kind] & "(" & terms.join(",") & ")"
   
@@ -152,7 +229,28 @@ proc new*(_: typedesc[Node], kind: NodeKind, children: varargs[Node]): Node =
   result = Node(kind: kind, children: @children)
 
 proc constant*(_: typedesc[Node], value: int): Node =
-  result = Node(kind: NodeConst, value: value)
+  result = Node(
+    kind: NodeConst,
+    value: value,
+    typeHint: Type(kind: TypeNumber)
+  )
+
+proc lambda*(_: typedesc[Node], args: seq[string], body: Node): Node =
+  result = Node(kind: NodeLambda,
+    args: args,
+    children: @[body],
+    typeHint: Type(
+      kind: TypeFunction,
+      args: some(newSeq[Type](args.len)),
+      res: body.typeHint
+    )
+  )
+
+proc call*(_: typedesc[Node], callee: Node, args: seq[Node]): Node =
+  result = Node(kind: NodeCall, children: @[callee] & args)
+  if callee.typeHint.isKind(TypeFunction): # TODO: Error if invalid type or invalid argument types
+    result.typeHint = callee.typeHint.res
+
 
 proc `-`*(a: Node): Node = Node.new(NodeNegate, a)
 
@@ -175,6 +273,7 @@ proc parse*(source: string): Node =
       TokenInt, TokenFractional, TokenName,
       TokenOp, TokenPrefixOp,
       TokenParOpen, TokenParClose,
+      TokenBracketOpen, TokenBracketClose,
       TokenComma, TokenSemicolon
     
     Token = object
@@ -183,9 +282,9 @@ proc parse*(source: string): Node =
   
   proc tokenize(source: string): seq[Token] =
     const
-      OP_CHARS = {'+', '-', '*', '/', '^', '%'}
+      OP_CHARS = {'+', '-', '*', '/', '^', '%', '<', '>', '='}
       WHITESPACE = {' ', '\n', '\t', '\r'}
-      SINGLE_CHAR_TOKENS = {'(', ')', ',', ';'}
+      SINGLE_CHAR_TOKENS = {'(', ')', '[', ']', ',', ';'}
     
     var it = 0
     
@@ -194,30 +293,29 @@ proc parse*(source: string): Node =
         result.add(source[it])
         it += 1
     
+    template singleChar(tokenKind: TokenKind) =
+      result.add(Token(kind: tokenKind))
+      it += 1
+    
     while it < source.len:
       case source[it]:
         of WHITESPACE:
           it += 1
-        of '(':
-          result.add(Token(kind: TokenParOpen))
-          it += 1
-        of ')':
-          result.add(Token(kind: TokenParClose))
-          it += 1
-        of ',':
-          result.add(Token(kind: TokenComma))
-          it += 1
-        of ';':
-          result.add(Token(kind: TokenSemicolon))
-          it += 1
+        of '(': singleChar(TokenParOpen)
+        of ')': singleChar(TokenParClose)
+        of '[': singleChar(TokenBracketOpen)
+        of ']': singleChar(TokenBracketClose)
+        of ',': singleChar(TokenComma)
+        of ';': singleChar(TokenSemicolon)
         of OP_CHARS:
-          let isPrefix = (it > 0 and source[it - 1] in WHITESPACE + {'(', ',', ';'} or it == 0) and
-                         it + 1 < source.len and source[it + 1] notin WHITESPACE
+          var isPrefix = (it > 0 and source[it - 1] in WHITESPACE + {'(', ',', ';'} or it == 0)
           
           var op = ""
           while it < source.len and source[it] in OP_CHARS:
             op.add(source[it])
             it += 1
+          
+          isPrefix = isPrefix and it < source.len and source[it] notin WHITESPACE
           
           if isPrefix:
             result.add(Token(kind: TokenPrefixOp, value: op))
@@ -320,6 +418,17 @@ proc parse*(source: string): Node =
         result.children = args.get()
     elif stream.take(TokenParOpen):
       result = stream.parse(0)
+      
+      if result.isNil:
+        result = Node.new(NodeTuple)
+      elif stream.next(TokenComma):
+        result = Node.new(NodeTuple, result)
+        while stream.take(TokenComma):
+          let item = stream.parse(0)
+          if item.isNil:
+            break
+          result.children.add(item)
+      
       if result.isNil or not stream.take(TokenParClose):
         return nil
     elif allowPrefix and stream.take(TokenPrefixOp):
@@ -337,6 +446,12 @@ proc parse*(source: string): Node =
     if result.isNil:
       return nil
     
+    while result.typeHint.isKind(TypeFunction) and stream.next(TokenParOpen):
+      let args = stream.parseArguments()
+      if args.isNone:
+        return nil
+      result = Node.call(result, args.get())
+    
     # Parse operators after value
     const MUL_LEVEL = 3
     while stream.next(TokenOp) or level <= MUL_LEVEL:
@@ -350,24 +465,37 @@ proc parse*(source: string): Node =
             of "/": MUL_LEVEL
             of "^": 4
             of "%": MUL_LEVEL
+            of "->": 1
             else: return nil
         
         if opLevel < level:
           stream.cur -= 1
           return
         
-        let other = stream.parse(opLevel + 1)
-        if other.isNil:
-          return nil
-        
-        result = case op:
-          of "+": result + other
-          of "-": result - other
-          of "*": result * other
-          of "/": result / other
-          of "^": result ^ other
-          of "%": result mod other
-          else: return nil
+        if op == "->":
+          # Lambda
+          let
+            args = case result.kind:
+              of NodeVar: @[result.name]
+              of NodeTuple: result.children.map(arg => arg.name)
+              else: return nil
+            body = stream.parse(opLevel)
+          if body.isNil:
+            return nil
+          result = Node.lambda(args, body)
+        else:
+          let other = stream.parse(opLevel + 1)
+          if other.isNil:
+            return nil
+          
+          result = case op:
+            of "+": result + other
+            of "-": result - other
+            of "*": result * other
+            of "/": result / other
+            of "^": result ^ other
+            of "%": result mod other
+            else: return nil
       else:
         let other = stream.parse(MUL_LEVEL + 1, allowPrefix = false)
         if other.isNil:
@@ -393,7 +521,7 @@ when isMainModule:
     for it in 0..<steps:
       let
         x = domain.a + (domain.b - domain.a) * (it / (steps - 1))
-        valueA = a.eval(toTable({"x": x}))
+        valueA = a.eval(toTable({"x": Value.initNumber(x)})).number
         valueB = b(x)
       if abs(valueA - valueB) > eps:
         return false
@@ -403,7 +531,7 @@ when isMainModule:
               domain: HSlice[float, float] = -10.0..10.0,
               steps: int = 10,
               eps: float = 0.0001): bool =
-    result = equals(a, x => b.eval(toTable({"x": x})),
+    result = equals(a, x => b.eval(toTable({"x": Value.initNumber(x)})).number,
       domain = domain,
       steps = steps,
       eps = eps
@@ -440,6 +568,9 @@ when isMainModule:
   assert equals(parse("x^2"), parse("x * x"))
   assert equals(parse("x^3"), parse("x * x * x"))
   assert equals(parse("e^x"), x => exp(x))
+  assert equals(parse("sqrt(x)"), parse("x^(1/2)"))
+  assert equals(parse("cbrt(x)"), parse("x^(1/3)"))
+  assert equals(parse("cbrt(x^2)"), parse("x^(2/3)"))
   
   # Tests / Mod
   
@@ -525,3 +656,12 @@ when isMainModule:
   assert equals(parse("-5x^2 x + 3x - 2"), x => -5 * x^3 + 3 * x - 2)
   assert equals(parse("(x + 1)(x - 1)"), x => x^2 - 1)
   assert equals(parse("(x + 2)(x - 3)^2"), x => (x + 2) * (x - 3)^2)
+
+  # Tests / Lambda
+  
+  assert equals(parse("(x -> x ^ 2)(x + 1)"), x => (x + 1) ^ 2)
+  assert equals(parse("((x, y) -> x + y)(x, x^2)"), x => x + x ^ 2)
+  assert equals(parse("(x -> y -> x + y)(x)(x^2)"), x => x + x ^ 2)
+  assert equals(parse("(x -> y -> z -> x + y + z)(x)(x^2)(-2)"), x => x + x ^ 2 - 2)
+  assert equals(parse("(x -> (y, z) -> x + y + z)(x)(x^2, -2)"), x => x + x ^ 2 - 2)
+  # TODO: assert equals(parse("(x -> f -> f(x))(x)(x -> x ^ 2)"), x => x ^ 2)

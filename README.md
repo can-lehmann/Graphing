@@ -13,6 +13,7 @@ A simple graphing application built with owlkettle.
 - Supported Functions: `sin`, `cos`, `tan`, `floor`, `ceil`, `abs`, `max`, `min`, `sqrt`, `cbrt`, `ln`
 - Operators: `+`, `-`, `*`, `/`, `^` (exponentiation), `%` (modulo)
 - Constants: `pi`, `e`
+- Lambda expressions: `(x -> x ^ 2)(x - 1)`
 
 ## Installation
 

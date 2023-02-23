@@ -227,7 +227,7 @@ method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.
   while screenX < view.size.x + STEP_SIZE:
     let
       x = view.mapReverse(Vec2(x: screenX)).x
-      y = graph.tree.eval(toTable({"x": x}))
+      y = graph.tree.eval(toTable({"x": Value.initNumber(x)})).asNumber()
     
     if isNaN(y) or isInf(y):
       isStart = true
@@ -326,7 +326,7 @@ method trace(graph: FunctionGraph, pos: Vec2): Trace =
     return Trace(valid: false)
   
   try:
-    let y = graph.tree.eval(toTable({"x": pos.x}))
+    let y = graph.tree.eval(toTable({"x": Value.initNumber(pos.x)})).asNumber()
     result = Trace.init(Vec2(x: pos.x, y: y), graph.color)
   except CatchableError as err:
     result = Trace(valid: false)
@@ -359,7 +359,7 @@ method drawPath(graph: PolarGraph, view: Viewport, ctx: CairoContext) =
   for it in 0..STEPS:
     let
       phi = 2.0 * PI * (it / STEPS)
-      r = graph.tree.eval(toTable({"phi": phi}))
+      r = graph.tree.eval(toTable({"phi": Value.initNumber(phi)})).asNumber()
     
     if isNaN(r) or isInf(r):
       isStart = true
@@ -380,7 +380,7 @@ method trace(graph: PolarGraph, pos: Vec2): Trace =
     var phi = arctan2(pos.y, pos.x)
     if phi < 0.0:
       phi += 2 * PI
-    let r = graph.tree.eval(toTable({"phi": phi}))
+    let r = graph.tree.eval(toTable({"phi": Value.initNumber(phi)})).asNumber()
     result = Trace.init(Vec2(x: cos(phi), y: sin(phi)) * r, graph.color)
   except CatchableError as err:
     result = Trace(valid: false)
