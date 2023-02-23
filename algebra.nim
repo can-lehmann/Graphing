@@ -50,7 +50,8 @@ type
     NodeLn,
     NodeCall
     NodeLambda
-    NodeTuple
+    NodeTuple,
+    NodeDerive
   
   Node* = ref object
     typeHint: Type
@@ -59,6 +60,7 @@ type
       of NodeConst: value: int
       of NodeVar: name: string
       of NodeLambda: args: seq[string]
+      of NodeDerive: argIndex: int
       else: discard
 
 const
@@ -76,12 +78,155 @@ const
     NodePow, NodeMod
   }
 
+proc new*(_: typedesc[Node], kind: NodeKind, children: varargs[Node]): Node =
+  result = Node(kind: kind, children: @children)
+
+proc constant*(_: typedesc[Node], value: int): Node =
+  result = Node(
+    kind: NodeConst,
+    value: value,
+    typeHint: Type(kind: TypeNumber)
+  )
+
+proc lambda*(_: typedesc[Node], args: seq[string], body: Node): Node =
+  result = Node(kind: NodeLambda,
+    args: args,
+    children: @[body],
+    typeHint: Type(
+      kind: TypeFunction,
+      args: some(newSeq[Type](args.len)),
+      res: body.typeHint
+    )
+  )
+
+proc call*(_: typedesc[Node], callee: Node, args: seq[Node]): Node =
+  result = Node(kind: NodeCall, children: @[callee] & args)
+  if callee.typeHint.isKind(TypeFunction): # TODO: Error if invalid type or invalid argument types
+    result.typeHint = callee.typeHint.res
+
+proc derive*(_: typedesc[Node], function: Node, argIndex: int = 0): Node =
+  result = Node(kind: NodeDerive,
+    children: @[function],
+    argIndex: argIndex,
+    typeHint: Type(
+      kind: TypeFunction,
+      res: Type(kind: TypeNumber)
+    )
+  )
+  if function.typeHint.isKind(TypeFunction):
+    # TODO: Check that argIndex < args.len
+    result.typeHint.args = function.typeHint.args
+
+{.push inline.}
+proc isConst(node: Node): bool = node.kind == NodeConst
+proc isConst(node: Node, value: int): bool = node.kind == NodeConst and node.value == value
+
+proc `-`*(a: Node): Node =
+  if a.isConst():
+    Node.constant(-a.value)
+  else:
+    Node.new(NodeNegate, a)
+
+proc `+`*(a, b: Node): Node =
+  if a.isConst(0):
+    b
+  elif b.isConst(0):
+    a
+  else:
+    Node.new(NodeAdd, a, b)
+
+proc `-`*(a, b: Node): Node = a + (-b)
+
+proc `*`*(a, b: Node): Node =
+  if a.isConst(0) or b.isConst(0):
+    Node.constant(0)
+  elif a.isConst(1):
+    b
+  elif b.isConst(1):
+    a
+  else:
+    Node.new(NodeMul, a, b)
+
+proc `/`*(a, b: Node): Node = a * Node.new(NodeReciprocal, b)
+proc `^`*(a, b: Node): Node = Node.new(NodePow, a, b)
+proc `mod`*(a, b: Node): Node = Node.new(NodeMod, a, b)
+
+proc sin(x: Node): Node = Node.new(NodeSin, x)
+proc cos(x: Node): Node = Node.new(NodeCos, x)
+proc ln(x: Node): Node = Node.new(NodeLn, x)
+
+proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
+{.pop.}
+
 proc findVariables(node: Node): HashSet[string] =
   case node.kind:
     of NodeVar: result = toHashSet([node.name])
     else:
       for child in node.children:
         result = result.union(child.findVariables())
+
+proc derive*(node: Node, varName: string): Node =
+  result = case node.kind:
+    of NodeConst: Node.constant(0)
+    of NodeVar:
+      if node.name == varName:
+        Node.constant(1)
+      else:
+        Node.constant(0)
+    of NodeAdd:
+      let children = node.children
+        .map(child => child.derive(varName))
+        .filter(child => not child.isConst(0))
+      
+      if children.len == 0:
+        Node.constant(0)
+      elif children.len == 1:
+        children[0]
+      else:
+        Node.new(NodeAdd, children)
+    of NodeMul:
+      if node.children.len == 0:
+        Node.constant(0)
+      elif node.children.len == 1:
+        node.children[0].derive(varName)
+      else:
+        let
+          a = Node.new(NodeMul, node.children[0..^2])
+          b = node.children[^1]
+        a.derive(varName) * b + b.derive(varName) * a
+    of NodeNegate:
+      -node.children[0].derive(varName)
+    of NodeReciprocal:
+      -Node.new(NodeReciprocal, (node.children[0] ^ Node.constant(2))) * node.children[0].derive(varName)
+    of NodePow:
+      # (f(x) ^ g(x))' = (e^(ln(f(x))*g(x))'
+      # = e^(ln(f(x))*g(x)) * (ln(f(x)) * g'(x) + f'(x)/f(x) * g(x))
+      # = (f(x) ^ g(x)) * (ln(f(x)) * g'(x) + f'(x)/f(x) * g(x))
+      
+      # Some examples to test if it works:
+      #   1. (x ^ 2)' = x ^ 2 * (ln(x) * 0 + 2 / x) = x ^ 2 * 2/x = 2x
+      #   2. (e ^ x)' = e ^ x * (ln(e) * 1 + 0 / e * x) = ln(e) * e ^ x = 1 * e^x = e ^ x
+      
+      let
+        f = node.children[0]
+        g = node.children[1]
+      
+      f ^ g * (ln(f) * g.derive(varName) + f.derive(varName) / f * g)
+    of NodeMod:
+      node.children[0].derive(varName)
+    of NodeSin:
+      let f = node.children[0]
+      cos(f) * f.derive(varName)
+    of NodeCos:
+      let f = node.children[0]
+      -sin(f) * f.derive(varName)
+    of NodeFloor, NodeCeil:
+      Node.constant(0)
+    of NodeLn:
+      let f = node.children[0]
+      f.derive(varName) / f
+    else:
+      raise newException(ValueError, "Unable to derive " & $node.kind)
 
 type
   ValueKind = enum
@@ -175,6 +320,18 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
         body: node.children[0],
         closure: vars
       )
+    of NodeDerive:
+      let function = node.children[0].eval(vars)
+      
+      if function.kind != ValueFunction:
+        raise newException(ValueError, "Unable to derive " & $function.kind)
+      
+      let body = function.body.derive(function.args[node.argIndex])
+      Value[T](kind: ValueFunction,
+        args: function.args,
+        body: body,
+        closure: function.closure
+      )
 
 proc stringify(node: Node, level: int): string =
   const LEVELS = [
@@ -217,6 +374,8 @@ proc stringify(node: Node, level: int): string =
         "(" & terms[0] & ",)"
       else:
         "(" & terms.join(",") & ")"
+    of NodeDerive:
+      terms[0] & "'"
     else:
       FUNCTION_NAMES[node.kind] & "(" & terms.join(",") & ")"
   
@@ -224,44 +383,6 @@ proc stringify(node: Node, level: int): string =
     result = "(" & result & ")"
 
 proc `$`*(node: Node): string = node.stringify(0)
-
-proc new*(_: typedesc[Node], kind: NodeKind, children: varargs[Node]): Node =
-  result = Node(kind: kind, children: @children)
-
-proc constant*(_: typedesc[Node], value: int): Node =
-  result = Node(
-    kind: NodeConst,
-    value: value,
-    typeHint: Type(kind: TypeNumber)
-  )
-
-proc lambda*(_: typedesc[Node], args: seq[string], body: Node): Node =
-  result = Node(kind: NodeLambda,
-    args: args,
-    children: @[body],
-    typeHint: Type(
-      kind: TypeFunction,
-      args: some(newSeq[Type](args.len)),
-      res: body.typeHint
-    )
-  )
-
-proc call*(_: typedesc[Node], callee: Node, args: seq[Node]): Node =
-  result = Node(kind: NodeCall, children: @[callee] & args)
-  if callee.typeHint.isKind(TypeFunction): # TODO: Error if invalid type or invalid argument types
-    result.typeHint = callee.typeHint.res
-
-
-proc `-`*(a: Node): Node = Node.new(NodeNegate, a)
-
-proc `+`*(a, b: Node): Node = Node.new(NodeAdd, a, b)
-proc `-`*(a, b: Node): Node = Node.new(NodeAdd, a, -b)
-proc `*`*(a, b: Node): Node = Node.new(NodeMul, a, b)
-proc `/`*(a, b: Node): Node = Node.new(NodeMul, a, Node.new(NodeReciprocal, b))
-proc `^`*(a, b: Node): Node = Node.new(NodePow, a, b)
-proc `mod`*(a, b: Node): Node = Node.new(NodeMod, a, b)
-
-proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
 
 # Parser
 
@@ -274,7 +395,8 @@ proc parse*(source: string): Node =
       TokenOp, TokenPrefixOp,
       TokenParOpen, TokenParClose,
       TokenBracketOpen, TokenBracketClose,
-      TokenComma, TokenSemicolon
+      TokenComma, TokenSemicolon,
+      TokenSingleQuote
     
     Token = object
       kind: TokenKind
@@ -284,7 +406,7 @@ proc parse*(source: string): Node =
     const
       OP_CHARS = {'+', '-', '*', '/', '^', '%', '<', '>', '='}
       WHITESPACE = {' ', '\n', '\t', '\r'}
-      SINGLE_CHAR_TOKENS = {'(', ')', '[', ']', ',', ';'}
+      SINGLE_CHAR_TOKENS = {'(', ')', '[', ']', ',', ';', '\''}
     
     var it = 0
     
@@ -307,6 +429,7 @@ proc parse*(source: string): Node =
         of ']': singleChar(TokenBracketClose)
         of ',': singleChar(TokenComma)
         of ';': singleChar(TokenSemicolon)
+        of '\'': singleChar(TokenSingleQuote)
         of OP_CHARS:
           var isPrefix = (it > 0 and source[it - 1] in WHITESPACE + {'(', ',', ';'} or it == 0)
           
@@ -446,11 +569,17 @@ proc parse*(source: string): Node =
     if result.isNil:
       return nil
     
-    while result.typeHint.isKind(TypeFunction) and stream.next(TokenParOpen):
-      let args = stream.parseArguments()
-      if args.isNone:
-        return nil
-      result = Node.call(result, args.get())
+    while (result.typeHint.isKind(TypeFunction) and stream.next(TokenParOpen)) or
+          stream.next(TokenSingleQuote):
+      if stream.take(TokenSingleQuote):
+        # Derive
+        result = Node.derive(result)
+      else:
+        # Call function
+        let args = stream.parseArguments()
+        if args.isNone:
+          return nil
+        result = Node.call(result, args.get())
     
     # Parse operators after value
     const MUL_LEVEL = 3
@@ -524,6 +653,7 @@ when isMainModule:
         valueA = a.eval(toTable({"x": Value.initNumber(x)})).number
         valueB = b(x)
       if abs(valueA - valueB) > eps:
+        echo valueA, " ", valueB
         return false
     return true
   
@@ -665,3 +795,25 @@ when isMainModule:
   assert equals(parse("(x -> y -> z -> x + y + z)(x)(x^2)(-2)"), x => x + x ^ 2 - 2)
   assert equals(parse("(x -> (y, z) -> x + y + z)(x)(x^2, -2)"), x => x + x ^ 2 - 2)
   # TODO: assert equals(parse("(x -> f -> f(x))(x)(x -> x ^ 2)"), x => x ^ 2)
+
+  # Tests / Derive
+  
+  # Tests / Derive / Polynomial
+  assert equals(parse("(x -> x + 1)'(x)"), x => 1.0)
+  assert equals(parse("(x -> x ^ 2)'(x)"), x => 2 * x)
+  assert equals(parse("(x -> x ^ 3 - 2x)'(x)"), x => 3 * x^2 - 2)
+  assert equals(parse("(x -> x * x * x - 2x^2 / x)'(x)"), x => 3 * x^2 - 2)
+  
+  # Tests / Derive / Exponential
+  assert equals(parse("(x -> x ^ 10)'(x)"), x => 10 * x ^ 9)
+  assert equals(parse("(x -> x ^ (-1))'(x)"), x => -1 / x ^ 2)
+  assert equals(parse("(x -> e ^ x)'(x)"), x => exp(x))
+  assert equals(parse("(x -> e ^ -x)'(x)"), x => -exp(-x))
+  assert equals(parse("(x -> e ^ (x^2))'(x)"), x => exp(x ^ 2) * 2 * x, domain = -2.5..2.5)
+  assert equals(parse("(x -> x ^ x)'(x)"), x => pow(x, x) * (ln(x) + 1), domain = 0.01..2.0)
+  assert equals(parse("(x -> ln(3x))'(x)"), x => 1 / x)
+  
+  # Tests / Derive / Trigonometry
+  assert equals(parse("(x -> sin(x)/cos(x))'(x)"), x => 1 / cos(x) ^ 2)
+  assert equals(parse("(x -> sin(x ^ 2))'(x)"), x => cos(x ^ 2) * 2 * x)
+  assert equals(parse("(x -> cos(x ^ 2))'(x)"), x => -sin(x ^ 2) * 2 * x)
