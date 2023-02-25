@@ -128,7 +128,9 @@ proc `-`*(a: Node): Node =
     Node.new(NodeNegate, a)
 
 proc `+`*(a, b: Node): Node =
-  if a.isConst(0):
+  if a.isConst() and b.isConst():
+    Node.constant(a.value + b.value)
+  elif a.isConst(0):
     b
   elif b.isConst(0):
     a
@@ -211,7 +213,10 @@ proc derive*(node: Node, varName: string): Node =
         f = node.children[0]
         g = node.children[1]
       
-      f ^ g * (ln(f) * g.derive(varName) + f.derive(varName) / f * g)
+      if g.isConst():
+        g * f ^ (g - Node.constant(1))
+      else:
+        f ^ g * (ln(f) * g.derive(varName) + f.derive(varName) / f * g)
     of NodeMod:
       node.children[0].derive(varName)
     of NodeSin:
@@ -395,7 +400,7 @@ proc parse*(source: string): Node =
       TokenOp, TokenPrefixOp,
       TokenParOpen, TokenParClose,
       TokenBracketOpen, TokenBracketClose,
-      TokenComma, TokenSemicolon,
+      TokenComma, TokenSemicolon, TokenColon,
       TokenSingleQuote
     
     Token = object
@@ -406,7 +411,7 @@ proc parse*(source: string): Node =
     const
       OP_CHARS = {'+', '-', '*', '/', '^', '%', '<', '>', '='}
       WHITESPACE = {' ', '\n', '\t', '\r'}
-      SINGLE_CHAR_TOKENS = {'(', ')', '[', ']', ',', ';', '\''}
+      SINGLE_CHAR_TOKENS = {'(', ')', '[', ']', ',', ';', '\'', ':'}
     
     var it = 0
     
@@ -430,6 +435,7 @@ proc parse*(source: string): Node =
         of ',': singleChar(TokenComma)
         of ';': singleChar(TokenSemicolon)
         of '\'': singleChar(TokenSingleQuote)
+        of ':': singleChar(TokenColon)
         of OP_CHARS:
           var isPrefix = (it > 0 and source[it - 1] in WHITESPACE + {'(', ',', ';'} or it == 0)
           
@@ -478,6 +484,11 @@ proc parse*(source: string): Node =
     result = stream.tokens[stream.cur - 1].value
   
   # Grammar
+  
+  proc parseType(stream: var TokenStream): Type =
+    if stream.take(TokenName):
+      if stream.value == "Fn":
+        result = Type(kind: TypeFunction)
   
   proc parse(stream: var TokenStream, level: int, allowPrefix: bool = true): Node
   
@@ -570,10 +581,17 @@ proc parse*(source: string): Node =
       return nil
     
     while (result.typeHint.isKind(TypeFunction) and stream.next(TokenParOpen)) or
-          stream.next(TokenSingleQuote):
+          stream.next(TokenSingleQuote) or
+          stream.next(TokenColon):
       if stream.take(TokenSingleQuote):
         # Derive
         result = Node.derive(result)
+      elif stream.take(TokenColon):
+        # Type Annotation
+        let typ = stream.parseType()
+        if typ.isNil:
+          return nil
+        result.typeHint = typ
       else:
         # Call function
         let args = stream.parseArguments()
@@ -794,7 +812,7 @@ when isMainModule:
   assert equals(parse("(x -> y -> x + y)(x)(x^2)"), x => x + x ^ 2)
   assert equals(parse("(x -> y -> z -> x + y + z)(x)(x^2)(-2)"), x => x + x ^ 2 - 2)
   assert equals(parse("(x -> (y, z) -> x + y + z)(x)(x^2, -2)"), x => x + x ^ 2 - 2)
-  # TODO: assert equals(parse("(x -> f -> f(x))(x)(x -> x ^ 2)"), x => x ^ 2)
+  assert equals(parse("(x -> f -> (f: Fn)(x))(x)(x -> x ^ 2)"), x => x ^ 2)
 
   # Tests / Derive
   
