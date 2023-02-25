@@ -58,6 +58,12 @@ proc mapReverse(view: Viewport, pos: Vec2): Vec2 =
   result.y *= -1
   result = result * size / view.size + view.center
 
+proc map(view: Viewport, box: Box2): Box2 =
+  result = Box2(
+    min: view.map(box.min),
+    max: view.map(box.max)
+  )
+
 proc update(view: var Viewport, size: tuple[width, height: int]) =
   view.size = Vec2(x: size.width.float, y: size.height.float)
   view.region = Box2(
@@ -385,6 +391,71 @@ method trace(graph: PolarGraph, pos: Vec2): Trace =
   except CatchableError as err:
     result = Trace(valid: false)
 
+# Graphs / Implicit Graph
+
+type ImplicitGraph = ref object of FunctionGraph
+
+proc new(_: typedesc[ImplicitGraph],
+         name: string,
+         text: string = "",
+         color: Color = COLORS[0],
+         lineWidth: float = GRAPH_LINE_WIDTH): ImplicitGraph =
+  result = ImplicitGraph(
+    name: name,
+    text: text,
+    color: color,
+    lineWidth: lineWidth
+  )
+  if text.len > 0:
+    result.tree = text.parse()
+
+method title(graph: ImplicitGraph): string =
+  result = graph.name & "(x, y) = 0"
+
+method draw(graph: ImplicitGraph, view: Viewport, ctx: CairoContext) =
+  if graph.tree.isNil:
+    return
+  
+  const
+    MAX_DEPTH = 5
+    DIVS = 2
+  
+  proc draw(region: Box2, depth: int) =
+    if depth <= 0:
+      ctx.rectangle(view.map(region))
+    else:
+      for y in 0..<DIVS:
+        for x in 0..<DIVS:
+          let
+            size = region.size / DIVS.float64
+            pos = region.min + size * Index2(x: x, y: y).toVec2()
+            subregion = Box2(min: pos, max: pos + size)
+          
+          let inter = graph.tree.eval({
+            "x": Value.initNumber(subregion.xInter()),
+            "y": Value.initNumber(subregion.yInter())
+          }.toTable()).asNumber()
+          
+          if 0 in inter:
+            draw(subregion, depth - 1)
+  
+  try:
+    let
+      smallestRect = view.region.size / float64(DIVS ^ MAX_DEPTH)
+      region = Box2(
+        min: floor(view.region.min / smallestRect) * smallestRect,
+        max: ceil(view.region.max / smallestRect) * smallestRect
+      )
+    draw(region, MAX_DEPTH)
+    ctx.source = graph.color
+    ctx.fill()
+    graph.error = false
+  except ValueError:
+    graph.error = true
+
+method trace(graph: ImplicitGraph, pos: Vec2): Trace =
+  discard
+
 # GraphView
 
 # GraphView / Grid
@@ -661,7 +732,8 @@ method view(menu: ViewMenuState): Widget =
 
 viewable App:
   graphs: seq[Graph] = @[
-    Graph FunctionGraph.new("f", "x ^ 2")
+    Graph FunctionGraph.new("f", "x ^ 2"),
+    #Graph ImplicitGraph.new("g", "(x + y) ^ 2 + y ^ 2 - 1")
   ]
   
   grid: Grid = Grid.new()
@@ -717,6 +789,12 @@ method view(app: AppState): Widget =
                     proc clicked() =
                       let name = app.graphs.findFreeName()
                       app.graphs.add(PolarGraph.new(name, color=sample(COLORS)))
+                  
+                  ModelButton:
+                    text = "Implicit Graph"
+                    proc clicked() =
+                      let name = app.graphs.findFreeName()
+                      app.graphs.add(ImplicitGraph.new(name, color=sample(COLORS)))
               
               proc clicked() =
                 let name = app.graphs.findFreeName()

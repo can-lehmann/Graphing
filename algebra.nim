@@ -21,6 +21,114 @@
 # SOFTWARE.
 
 import std/[math, sets, tables, sequtils, strutils, sugar, options]
+import geometrymath
+
+# Intervals
+
+{.push inline.}
+proc contains*(inter: Inter, value: float64): bool =
+  inter.min <= value and inter.max >= value
+
+proc `+`*(a, b: Inter): Inter =
+  Inter(min: a.min + b.min, max: a.max + b.max)
+
+proc `-`*(a, b: Inter): Inter =
+  Inter(min: a.min - b.max, max: a.max - b.min)
+
+proc `-`*(a: Inter): Inter =
+  Inter(min: -a.max, max: -a.min)
+
+proc `*`*(a, b: Inter): Inter =
+  let vals = [
+    a.min * b.min,
+    a.max * b.min,
+    a.min * b.max,
+    a.max * b.max
+  ]
+  
+  Inter(
+    min: min(vals),
+    max: max(vals)
+  )
+
+proc reciprocal*(inter: Inter): Inter =
+  if 0.0 in inter:
+    Inter(min: -Inf, max: Inf)
+  else:
+    Inter(
+      min: 1.0 / inter.max,
+      max: 1.0 / inter.min
+    )
+
+proc min*(a, b: Inter): Inter =
+  Inter(min: min(a.min, b.min), max: min(a.max, b.max))
+
+proc max*(a, b: Inter): Inter =
+  Inter(min: max(a.min, b.min), max: max(a.max, b.max))
+
+proc sin*(x: Inter): Inter = Inter(min: -1.0, max: 1.0) # TODO
+proc cos*(x: Inter): Inter = Inter(min: -1.0, max: 1.0) # TODO
+proc tan*(x: Inter): Inter = Inter(min: -Inf, max: Inf) # TODO
+
+proc floor*(a: Inter): Inter =
+  Inter(min: floor(a.min), max: floor(a.max))
+
+proc ceil*(a: Inter): Inter =
+  Inter(min: ceil(a.min), max: ceil(a.max))
+
+proc abs*(a: Inter): Inter =
+  Inter(min: max(0.0, max(a.min, -a.max)), max: max(-a.min, a.max))
+
+proc ln*(a: Inter): Inter =
+  Inter(
+    min: if a.min <= 0.0: -Inf else: ln(a.min),
+    max: if a.max <= 0.0: -Inf else: ln(a.max)
+  )
+
+proc exp*(a: Inter): Inter =
+  Inter(min: exp(a.min), max: exp(a.max))
+
+proc pow*(a, b: Inter): Inter =
+  let vals = [
+    pow(a.min, b.min),
+    pow(a.max, b.min),
+    pow(a.min, b.max),
+    pow(a.max, b.max)
+  ]
+  result = Inter(min: min(vals), max: max(vals))
+  if 0.0 in a:
+    result.min = min(result.min, 0.0)
+    result.max = max(result.max, 0.0)
+
+proc `mod`*(a, b: Inter): Inter =
+  Inter(min: -b.max, max: b.max) # TODO
+{.pop.}
+
+proc prod*(inters: openArray[Inter]): Inter =
+  result = Inter(min: 1.0, max: 1.0)
+  for inter in inters:
+    result = result * inter
+
+proc min*(inters: openArray[Inter]): Inter =
+  result = Inter(min: Inf, max: Inf)
+  for inter in inters:
+    result = min(result, inter)
+
+proc max*(inters: openArray[Inter]): Inter =
+  result = Inter(min: -Inf, max: -Inf)
+  for inter in inters:
+    result = max(result, inter)
+
+# float64
+
+{.push inline.}
+
+proc reciprocal*(x: float64): float64 =
+  1.0 / x
+
+{.pop.}
+
+# Types
 
 type
   TypeKind = enum
@@ -37,6 +145,8 @@ type
 
 proc isKind(typ: Type, kind: TypeKind): bool =
   result = not typ.isNil and typ.kind == kind
+
+# Node
 
 type
   NodeKind = enum
@@ -77,6 +187,8 @@ const
   BinaryNodes = {
     NodePow, NodeMod
   }
+
+# Node / Constructors
 
 proc new*(_: typedesc[Node], kind: NodeKind, children: varargs[Node]): Node =
   result = Node(kind: kind, children: @children)
@@ -160,12 +272,16 @@ proc ln(x: Node): Node = Node.new(NodeLn, x)
 proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
 {.pop.}
 
+# Node / Utils
+
 proc findVariables(node: Node): HashSet[string] =
   case node.kind:
     of NodeVar: result = toHashSet([node.name])
     else:
       for child in node.children:
         result = result.union(child.findVariables())
+
+# Node / Derive
 
 proc derive*(node: Node, varName: string): Node =
   result = case node.kind:
@@ -233,6 +349,8 @@ proc derive*(node: Node, varName: string): Node =
     else:
       raise newException(ValueError, "Unable to derive " & $node.kind)
 
+# Node / Evaluate
+
 type
   ValueKind = enum
     ValueNumber, ValueFunction, ValueTuple
@@ -253,16 +371,29 @@ proc asNumber*[T](value: Value[T]): T =
     raise newException(ValueError, "Value is not a number")
   result = value.number
 
-proc initNumber*[T](_: typedesc[Value[T]], number: T): Value[T] =
-  result = Value[T](kind: ValueNumber, number: number)
+proc initNumber*[T](_: typedesc[Value[T]], value: T): Value[T] =
+  result = Value[T](kind: ValueNumber, number: value)
+
+proc initNumber*(_: typedesc[Value[Inter]], value: float64): Value[Inter] =
+  result = Value[Inter].initNumber(Inter(
+    min: value,
+    max: value
+  ))
+
+proc initNumber*(_: typedesc[Value[Inter]], value: int): Value[Inter] =
+  result = Value[Inter].initNumber(float64(value))
+
+proc initNumber*[T](_: typedesc[Value[T]], value: int): Value[T] =
+  result = Value[T].initNumber(T(value))
+
 
 proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
   case node.kind:
-    of NodeConst: Value[T].initNumber(T(node.value))
+    of NodeConst: Value[T].initNumber(node.value)
     of NodeVar:
       case node.name:
-        of "pi": Value.initNumber(T(PI)) # TODO: Find a better system for constants
-        of "e": Value.initNumber(T(E))
+        of "pi": Value[T].initNumber(PI) # TODO: Find a better system for constants
+        of "e": Value[T].initNumber(E)
         else:
           if node.name notin vars:
             raise newException(ValueError, "Variable undefined")
@@ -277,13 +408,13 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
           of NodeMin: min(children)
           else:
             raise newException(ValueError, "Unreachable")
-      Value.initNumber(res)
+      Value[T].initNumber(res)
     of UnaryNodes:
       let
         value = node.children[0].eval(vars).asNumber()
         res = case node.kind:
           of NodeNegate: -value
-          of NodeReciprocal: T(1) / value
+          of NodeReciprocal: reciprocal(value)
           of NodeSin: sin(value)
           of NodeCos: cos(value)
           of NodeTan: tan(value)
@@ -293,14 +424,14 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
           of NodeLn: ln(value)
           else:
             raise newException(ValueError, "Unreachable")
-      Value.initNumber(res)
+      Value[T].initNumber(res)
     of BinaryNodes:
       let
         a = node.children[0].eval(vars).asNumber()
         b = node.children[1].eval(vars).asNumber()
       case node.kind:
-        of NodePow: Value.initNumber(pow(a, b))
-        of NodeMod: Value.initNumber(a mod b)
+        of NodePow: Value[T].initNumber(pow(a, b))
+        of NodeMod: Value[T].initNumber(a mod b)
         else:
           raise newException(ValueError, "Unreachable")
     of NodeCall:
@@ -337,6 +468,8 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
         body: body,
         closure: function.closure
       )
+
+# Node / Print
 
 proc stringify(node: Node, level: int): string =
   const LEVELS = [
