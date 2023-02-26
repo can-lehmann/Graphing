@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import std/[tables, sets, sequtils, sugar, strformat, strutils, random, math]
+import std/[tables, sets, sequtils, sugar, strformat, strutils, random, math, os]
 import owlkettle, owlkettle/[adw, cairo, dataentries]
 import geometrymath
 import algebra
@@ -41,6 +41,14 @@ type Viewport = ref object
   height: float
   size: Vec2
   region: Box2
+
+proc clone(viewport: Viewport): Viewport =
+  Viewport(
+    center: viewport.center,
+    height: viewport.height,
+    size: viewport.size,
+    region: viewport.region
+  )
 
 proc map(view: Viewport, pos: Vec2): Vec2 =
   let
@@ -64,12 +72,15 @@ proc map(view: Viewport, box: Box2): Box2 =
     max: view.map(box.max)
   )
 
-proc update(view: var Viewport, size: tuple[width, height: int]) =
-  view.size = Vec2(x: size.width.float, y: size.height.float)
+proc updateRegion(view: Viewport) =
   view.region = Box2(
     min: view.mapReverse(Vec2(y: view.size.y)),
     max: view.mapReverse(Vec2(x: view.size.x))
   )
+
+proc update(view: Viewport, size: tuple[width, height: int]) =
+  view.size = Vec2(x: size.width.float, y: size.height.float)
+  view.updateRegion()
 
 # Utilities/Colors
 
@@ -461,7 +472,8 @@ method trace(graph: ImplicitGraph, pos: Vec2): Trace =
 # GraphView / Grid
 
 type Grid = ref object
-  shown: bool
+  showGrid: bool
+  showAxes: bool
   
   backgroundColor: Color
   gridColor: Color
@@ -469,16 +481,23 @@ type Grid = ref object
 
 proc new(_: typedesc[Grid]): Grid =
   result = Grid(
-    shown: true,
+    showGrid: true,
+    showAxes: true,
     backgroundColor: BACKGROUND_COLOR,
     gridColor: GRID_COLOR,
     axisColor: AXIS_COLOR
   )
 
 proc guessGridSize(view: Viewport): tuple[precision: int, size: Vec2] =
+  const EPS = 0.000000001
+  
   let
     tickCount = floor(view.size / TICK_DIST)
     optimalSize = view.region.size / tickCount
+  if tickCount.x < 1 or optimalSize.x < EPS:
+    return (0, Vec2(x: 1, y: 1))
+  
+  let
     precision = floor(log10(optimalSize.x))
     magnitude = pow(10.0, precision)
   
@@ -501,12 +520,12 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
   ctx.source = grid.backgroundColor
   ctx.fill()
   
-  if grid.shown:
-    let
-      (precision, size) = guessGridSize(view)
-      min = floor(view.region.min / size).toIndex2()
-      max = ceil(view.region.max / size).toIndex2()
-    
+  let
+    (precision, size) = guessGridSize(view)
+    min = floor(view.region.min / size).toIndex2()
+    max = ceil(view.region.max / size).toIndex2()
+  
+  if grid.showGrid:
     block backgroundGrid:
       for x in min.x..max.x:
         let pos = view.map(Vec2(x: float(x) * size.x))
@@ -521,7 +540,8 @@ proc draw(grid: Grid, view: Viewport, ctx: CairoContext) =
       ctx.lineWidth = GRID_WIDTH
       ctx.source = grid.gridColor
       ctx.stroke()
-    
+  
+  if grid.showAxes:
     block axis:
       let origin = view.map(Vec2())
       
@@ -632,10 +652,233 @@ method view(graphView: GraphViewState): Widget =
             graphView.viewport.height *= pow(SMOOTH_ZOOM_SPEED, event.dy)
           else: discard
 
+
+# Project
+
+type Project = ref object
+  graphs: seq[Graph]
+  path: string
+
+proc add(project: Project, graph: Graph) =
+  project.graphs.add(graph)
+
+proc findFreeName(project: Project): string =
+  var names = toHashSet(["f", "g", "h"])
+  for graph in project.graphs:
+    names.excl(graph.name)
+  
+  if names.len > 0:
+    result = names.peek()
+  else:
+    # Append an index to f (like f1, f2, ...)
+    var maxIndex = 0
+    for graph in project.graphs:
+      if graph.name.len > 1 and
+         graph.name[0] == 'f' and
+         graph.name[1..^1].allIt(it in '0'..'9'):
+        let index = graph.name[1..^1].parseInt()
+        if index > maxIndex:
+          maxIndex = index
+    
+    result = "f" & $(maxIndex + 1)
+
+# Viewport Preferences
+
+viewable ViewportPreferences:
+  viewport: Viewport
+
+method view(preferences: ViewportPreferencesState): Widget =
+  let viewport = preferences.viewport
+  result = gui:
+    PreferencesGroup:
+      title = "Viewport"
+      
+      Button {.addSuffix.}:
+        icon = "zoom-fit-best-symbolic"
+        style = {ButtonFlat}
+        
+        proc clicked() =
+          viewport.center = Vec2()
+          viewport.height = 10.0
+      
+      ActionRow:
+        title = "Center"
+        
+        Vec2Entry {.addSuffix.}:
+          value = viewport.center
+          proc changed(value: Vec2) =
+            viewport.center = value
+      
+      ActionRow:
+        title = "Height"
+        
+        NumberEntry {.addSuffix.}:
+          value = viewport.height
+          xAlign = 1.0
+          maxWidth = 6
+          
+          proc changed(value: float) =
+            viewport.height = value
+
+# Grid Preferences
+
+viewable GridPreferences:
+  grid: Grid
+
+method view(preferences: GridPreferencesState): Widget =
+  let grid = preferences.grid
+  result = gui:
+    PreferencesGroup:
+      title = "Grid"
+      
+      ActionRow:
+        title = "Background"
+        
+        ColorButton {.addSuffix.}:
+          color = grid.backgroundColor
+          proc changed(color: Color) =
+            grid.backgroundColor = color
+      
+      ActionRow:
+        title = "Show Grid"
+        
+        Switch {.addSuffix.}:
+          state = grid.showGrid
+          proc changed(state: bool) =
+            grid.showGrid = state
+      
+      ActionRow:
+        title = "Grid Color"
+        
+        ColorButton {.addSuffix.}:
+          color = grid.gridColor
+          proc changed(color: Color) =
+            grid.gridColor = color
+      
+      ActionRow:
+        title = "Show Axes"
+        
+        Switch {.addSuffix.}:
+          state = grid.showAxes
+          proc changed(state: bool) =
+            grid.showAxes = state
+      
+      ActionRow:
+        title = "Axis Color"
+        
+        ColorButton {.addSuffix.}:
+          color = grid.axisColor
+          proc changed(color: Color) =
+            grid.axisColor = color
+
+
+# Export Dialog
+
+viewable ExportDialog:
+  project: Project
+  viewport: Viewport
+  grid: Grid = Grid.new()
+
+proc renderPixbuf(dialog: ExportDialogState): Pixbuf =
+  let view = dialog.viewport
+  if view.size.x <= 0 or view.size.y <= 0:
+    return nil
+  
+  let
+    surface = newImageSurface(FormatRGB24,
+      int(dialog.viewport.size.x),
+      int(dialog.viewport.size.y)
+    )
+    ctx = newCairoContext(surface)
+  
+  view.updateRegion()
+  dialog.grid.draw(view, ctx)
+  
+  for graph in dialog.project.graphs:
+    graph.draw(view, ctx)
+  
+  let
+    pixelCount = surface.width * surface.height
+    imageData = cast[ptr UncheckedArray[uint32]](surface.data)
+  
+  var data = newSeq[uint8](3 * pixelCount)
+  for it in 0..<pixelCount:
+    data[3 * it] = uint8((imageData[it] shr 16) and 0xff) # Red
+    data[3 * it + 1] = uint8((imageData[it] shr 8) and 0xff) # Green
+    data[3 * it + 2] = uint8(imageData[it] and 0xff) # Blue
+  result = newPixbuf(surface.width, surface.height, data)
+  
+  defer:
+    ctx.destroy()
+    surface.destroy()
+
+method view(dialog: ExportDialogState): Widget =
+  result = gui:
+    Dialog:
+      title = "Export"
+      
+      DialogButton {.addButton.}:
+        text = "Cancel"
+        res = DialogCancel
+      
+      DialogButton {.addButton.}:
+        text = "Export"
+        res = DialogAccept
+        style = {ButtonSuggested}
+      
+      Box:
+        orient = OrientX
+        
+        ScrolledWindow {.expand: false.}:
+          sizeRequest = (270, -1)
+          Box:
+            orient = OrientY
+            margin = 12
+            spacing = 6
+            
+            PreferencesGroup {.expand: false.}:
+              title = "Image"
+              
+              ActionRow:
+                title = "Width"
+                
+                NumberEntry {.addSuffix.}:
+                  value = dialog.viewport.size.x
+                  maxWidth = 6
+                  xAlign = 1.0
+                  proc changed(value: float64) =
+                    dialog.viewport.size.x = value
+              
+              ActionRow:
+                title = "Height"
+                
+                NumberEntry {.addSuffix.}:
+                  value = dialog.viewport.size.y
+                  maxWidth = 6
+                  xAlign = 1.0
+                  proc changed(value: float64) =
+                    dialog.viewport.size.y = value
+            
+            ViewportPreferences {.expand: false.}:
+              viewport = dialog.viewport
+            
+            GridPreferences {.expand: false.}:
+              grid = dialog.grid
+        
+        Separator() {.expand: false.}
+        
+        let pixbuf = dialog.renderPixbuf()
+        if pixbuf.isNil:
+          Label(text = "Unable to render")
+        else:
+          Picture:
+            pixbuf = pixbuf
+
 # AppMenu
 
 viewable AppMenu:
-  discard
+  project: Project
+  viewport: Viewport
 
 method view(menu: AppMenuState): Widget =
   result = gui:
@@ -655,6 +898,55 @@ method view(menu: AppMenuState): Widget =
           
           ModelButton:
             text = "Save"
+          
+          Separator()
+          
+          ModelButton:
+            text = "Export"
+            
+            proc clicked() =
+              # Show export dialog
+              let (res, state) = menu.app.open:
+                gui:
+                  ExportDialog:
+                    project = menu.project
+                    viewport = menu.viewport.clone()
+              
+              if res.kind != DialogAccept:
+                return
+              
+              let exportDialog = ExportDialogState(state)
+              
+              # Ask where to save the image
+              let (fileRes, fileState) = menu.app.open:
+                gui:
+                  FileChooserDialog:
+                    action = FileChooserSave
+                    
+                    DialogButton {.addButton.}:
+                      text = "Export"
+                      res = DialogAccept
+                      style = {ButtonSuggested}
+                    
+                    DialogButton {.addButton.}:
+                      text = "Cancel"
+                      res = DialogCancel
+              
+              if fileRes.kind != DialogAccept:
+                return
+              
+              # Save image
+              let
+                path = FileChooserDialogState(fileState).filename
+                pixbuf = exportDialog.renderPixbuf()
+                (dir, name, ext) = path.splitFile()
+                fileType = case ext.toLowerAscii():
+                  of ".png": "png"
+                  of ".jpg", ".jpeg": "jpeg"
+                  else:
+                    raise newException(ValueError, "Unsupported file type: \"" & ext & "\"")
+              
+              pixbuf.save(path, fileType)
           
           Separator()
           
@@ -694,9 +986,17 @@ method view(menu: ViewMenuState): Widget =
               title = "Grid"
               
               Switch {.addSuffix.}:
-                state = menu.grid.shown
+                state = menu.grid.showGrid
                 proc changed(state: bool) =
-                  menu.grid.shown = state
+                  menu.grid.showGrid = state
+            
+            ActionRow:
+              title = "Axes"
+              
+              Switch {.addSuffix.}:
+                state = menu.grid.showAxes
+                proc changed(state: bool) =
+                  menu.grid.showAxes = state
             
             ActionRow:
               title = "Tracing"
@@ -706,60 +1006,19 @@ method view(menu: ViewMenuState): Widget =
                 proc changed(state: bool) =
                   menu.options.tracing = state
           
-          PreferencesGroup:
-            title = "Viewport"
-            
-            ActionRow:
-              title = "Center"
-              
-              Vec2Entry {.addSuffix.}:
-                value = menu.viewport.center
-                proc changed(value: Vec2) =
-                  menu.viewport.center = value
-            
-            ActionRow:
-              title = "Height"
-              
-              NumberEntry {.addSuffix.}:
-                value = menu.viewport.height
-                xAlign = 1.0
-                maxWidth = 6
-                
-                proc changed(value: float) =
-                  menu.viewport.height = value
+          ViewportPreferences(viewport = menu.viewport)
 
 # Main Application
 
 viewable App:
-  graphs: seq[Graph] = @[
+  project: Project = Project(graphs: @[
     Graph FunctionGraph.new("f", "x ^ 2"),
     #Graph ImplicitGraph.new("g", "(x + y) ^ 2 + y ^ 2 - 1")
-  ]
+  ])
   
   grid: Grid = Grid.new()
   viewport: Viewport = Viewport(height: 10.0)
   displayOptions: DisplayOptions = DisplayOptions()
-
-
-proc findFreeName(graphs: seq[Graph]): string =
-  var names = toHashSet(["f", "g", "h"])
-  for graph in graphs:
-    names.excl(graph.name)
-  
-  if names.len > 0:
-    result = names.peek()
-  else:
-    # Append an index to f (like f1, f2, ...)
-    var maxIndex = 0
-    for graph in graphs:
-      if graph.name.len > 1 and
-         graph.name[0] == 'f' and
-         graph.name[1..^1].allIt(it in '0'..'9'):
-        let index = graph.name[1..^1].parseInt()
-        if index > maxIndex:
-          maxIndex = index
-    
-    result = "f" & $(maxIndex + 1)
 
 method view(app: AppState): Widget =
   result = gui:
@@ -787,24 +1046,24 @@ method view(app: AppState): Widget =
                   ModelButton:
                     text = "Polar Graph"
                     proc clicked() =
-                      let name = app.graphs.findFreeName()
-                      app.graphs.add(PolarGraph.new(name, color=sample(COLORS)))
+                      let name = app.project.findFreeName()
+                      app.project.add(PolarGraph.new(name, color=sample(COLORS)))
                   
                   ModelButton:
                     text = "Implicit Graph"
                     proc clicked() =
-                      let name = app.graphs.findFreeName()
-                      app.graphs.add(ImplicitGraph.new(name, color=sample(COLORS)))
+                      let name = app.project.findFreeName()
+                      app.project.add(ImplicitGraph.new(name, color=sample(COLORS)))
               
               proc clicked() =
-                let name = app.graphs.findFreeName()
-                app.graphs.add(FunctionGraph.new(name, color=sample(COLORS)))
+                let name = app.project.findFreeName()
+                app.project.add(FunctionGraph.new(name, color=sample(COLORS)))
           
           ScrolledWindow:
             PreferencesGroup:
               margin = 12
               
-              for graph in app.graphs:
+              for graph in app.project.graphs:
                 insert(graph.view())
         
         Separator() {.expand: false.}
@@ -815,9 +1074,16 @@ method view(app: AppState): Widget =
           HeaderBar {.expand: false.}:
             WindowTitle {.addTitle.}:
               title = APP_NAME
-              subtitle = $app.graphs.len & " graphs"
+              
+              if app.project.path.len == 0:
+                subtitle = $app.project.graphs.len & " graphs"
+              else:
+                subtitle = $app.project.path
             
-            AppMenu() {.addRight.}
+            AppMenu {.addRight.}:
+              project = app.project
+              viewport = app.viewport
+            
             ViewMenu {.addRight.}:
               grid = app.grid
               viewport = app.viewport
@@ -841,7 +1107,7 @@ method view(app: AppState): Widget =
             orient = OrientY
             
             GraphView:
-              graphs = app.graphs
+              graphs = app.project.graphs
               grid = app.grid
               viewport = app.viewport
               tracing = app.displayOptions.tracing
