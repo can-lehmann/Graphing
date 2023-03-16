@@ -118,7 +118,7 @@ method view(entry: Vec2EntryState): Widget =
   result = gui:
     Box:
       orient = OrientX
-      style = {BoxLinked}
+      style = [BoxLinked]
       
       NumberEntry:
         value = entry.value.x
@@ -282,9 +282,9 @@ method view(graph: FunctionGraph): Widget =
       text = graph.text
       
       if graph.tree.isNil or graph.error:
-        style = {EntryError}
+        style = [EntryError]
       else:
-        style = {}
+        style = []
       
       proc changed(text: string) =
         graph.text = text
@@ -292,7 +292,7 @@ method view(graph: FunctionGraph): Widget =
       
       MenuButton {.addSuffix.}:
         icon = "view-more-symbolic"
-        style = {ButtonFlat}
+        style = [ButtonFlat]
         
         Popover:
           sizeRequest = (250, -1)
@@ -695,7 +695,7 @@ method view(preferences: ViewportPreferencesState): Widget =
       
       Button {.addSuffix.}:
         icon = "zoom-fit-best-symbolic"
-        style = {ButtonFlat}
+        style = [ButtonFlat]
         
         proc clicked() =
           viewport.center = Vec2()
@@ -824,7 +824,7 @@ method view(dialog: ExportDialogState): Widget =
       DialogButton {.addButton.}:
         text = "Export"
         res = DialogAccept
-        style = {ButtonSuggested}
+        style = [ButtonSuggested]
       
       Box:
         orient = OrientX
@@ -884,7 +884,7 @@ method view(menu: AppMenuState): Widget =
   result = gui:
     MenuButton:
       icon = "open-menu"
-      style = {ButtonFlat}
+      style = [ButtonFlat]
       
       PopoverMenu:
         Box:
@@ -926,7 +926,7 @@ method view(menu: AppMenuState): Widget =
                     DialogButton {.addButton.}:
                       text = "Export"
                       res = DialogAccept
-                      style = {ButtonSuggested}
+                      style = [ButtonSuggested]
                     
                     DialogButton {.addButton.}:
                       text = "Cancel"
@@ -969,7 +969,7 @@ method view(menu: ViewMenuState): Widget =
   result = gui:
     MenuButton:
       icon = "view-grid"
-      style = {ButtonFlat}
+      style = [ButtonFlat]
       
       Popover:
         sizeRequest = (300, -1)
@@ -1037,7 +1037,7 @@ method view(app: AppState): Widget =
             
             SplitButton {.addLeft.}:
               icon = "list-add"
-              style = {ButtonFlat}
+              style = [ButtonFlat]
               
               PopoverMenu:
                 Box:
@@ -1091,14 +1091,14 @@ method view(app: AppState): Widget =
             
             Button {.addRight.}:
               icon = "zoom-in-symbolic"
-              style = {ButtonFlat}
+              style = [ButtonFlat]
               
               proc clicked() =
                 app.viewport.height /= ZOOM_SPEED
             
             Button {.addRight.}:
               icon = "zoom-out-symbolic"
-              style = {ButtonFlat}
+              style = [ButtonFlat]
               
               proc clicked() =
                 app.viewport.height *= ZOOM_SPEED
