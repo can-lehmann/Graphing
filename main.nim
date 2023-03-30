@@ -721,6 +721,7 @@ proc findFreeName(project: Project): string =
     result = "f" & $(maxIndex + 1)
 
 proc save(project: Project, path: string) =
+  project.path = path
   writeFile(path, $(%project.graphs))
 
 proc initFromJson(graph: var Graph, node: JsonNode, path: var string) {.raises: [ValueError].} =
@@ -735,7 +736,10 @@ proc initFromJson(graph: var Graph, node: JsonNode, path: var string) {.raises: 
   graph.fromJson(node)
 
 proc load(_: typedesc[Project], path: string): Project =
-  result = Project(graphs: parseFile(path).to(seq[Graph]))
+  result = Project(
+    graphs: parseFile(path).to(seq[Graph]),
+    path: path
+  )
 
 # Viewport Preferences
 
