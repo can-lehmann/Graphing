@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import std/[tables, sets, sequtils, sugar, strformat, strutils, random, math, os]
+import std/[tables, sets, sequtils, sugar, strformat, strutils, random, math, os, json]
 import owlkettle, owlkettle/[adw, cairo, dataentries]
 import geometrymath
 import algebra
@@ -33,6 +33,12 @@ proc peek[T](hashSet: HashSet[T]): T =
 
 proc isInf(x: float): bool =
   result = x == Inf or x == NegInf
+
+proc `%`[T: tuple](x: T): JsonNode =
+  mixin `%`
+  result = newJObject()
+  for name, value in x.fieldPairs:
+    result[name] = %value
 
 # Utilities/Viewport
 
@@ -174,6 +180,8 @@ type Graph = ref object of RootObj
 
 method draw(graph: Graph, view: Viewport, ctx: CairoContext) {.base.} = discard
 method view(graph: Graph): Widget {.base.} = discard
+method `%`(graph: Graph): JsonNode {.base.} = discard
+method fromJson(graph: Graph, node: JsonNode) {.base, raises: [ValueError].} = discard
 
 # Trace
 
@@ -348,6 +356,22 @@ method trace(graph: FunctionGraph, pos: Vec2): Trace =
   except CatchableError as err:
     result = Trace(valid: false)
 
+method `%`(graph: FunctionGraph): JsonNode =
+  result = %(
+    kind: "FunctionGraph",
+    name: graph.name,
+    text: graph.text,
+    color: graph.color,
+    lineWidth: graph.lineWidth
+  )
+
+method fromJson(graph: FunctionGraph, node: JsonNode) =
+  graph.name = node["name"].to(string)
+  graph.text = node["text"].to(string)
+  graph.color = node["color"].to(Color)
+  graph.lineWidth = node["lineWidth"].to(float)
+  graph.tree = parse(graph.text)
+
 # Graphs / Polar Graph
 
 type PolarGraph = ref object of FunctionGraph
@@ -401,6 +425,10 @@ method trace(graph: PolarGraph, pos: Vec2): Trace =
     result = Trace.init(Vec2(x: cos(phi), y: sin(phi)) * r, graph.color)
   except CatchableError as err:
     result = Trace(valid: false)
+
+method `%`(graph: PolarGraph): JsonNode =
+  result = procCall %FunctionGraph(graph)
+  result["kind"] = %"PolarGraph"
 
 # Graphs / Implicit Graph
 
@@ -466,6 +494,10 @@ method draw(graph: ImplicitGraph, view: Viewport, ctx: CairoContext) =
 
 method trace(graph: ImplicitGraph, pos: Vec2): Trace =
   discard
+
+method `%`(graph: ImplicitGraph): JsonNode =
+  result = procCall %FunctionGraph(graph)
+  result["kind"] = %"ImplicitGraph"
 
 # GraphView
 
@@ -659,6 +691,12 @@ type Project = ref object
   graphs: seq[Graph]
   path: string
 
+proc new(_: typedesc[Project]): Project =
+  result = Project(graphs: @[
+    Graph FunctionGraph.new("f", "x ^ 2"),
+    #Graph ImplicitGraph.new("g", "(x + y) ^ 2 + y ^ 2 - 1")
+  ])
+
 proc add(project: Project, graph: Graph) =
   project.graphs.add(graph)
 
@@ -681,6 +719,23 @@ proc findFreeName(project: Project): string =
           maxIndex = index
     
     result = "f" & $(maxIndex + 1)
+
+proc save(project: Project, path: string) =
+  writeFile(path, $(%project.graphs))
+
+proc initFromJson(graph: var Graph, node: JsonNode, path: var string) {.raises: [ValueError].} =
+  let kind = node["kind"].getStr()
+  case kind:
+    of "FunctionGraph": graph = FunctionGraph()
+    of "PolarGraph": graph = PolarGraph()
+    of "ImplicitGraph": graph = ImplicitGraph()
+    else:
+      raise newException(ValueError, kind)
+  
+  graph.fromJson(node)
+
+proc load(_: typedesc[Project], path: string): Project =
+  result = Project(graphs: parseFile(path).to(seq[Graph]))
 
 # Viewport Preferences
 
@@ -879,6 +934,8 @@ method view(dialog: ExportDialogState): Widget =
 viewable AppMenu:
   project: Project
   viewport: Viewport
+  
+  proc openProject(project: Project)
 
 method view(menu: AppMenuState): Widget =
   result = gui:
@@ -892,12 +949,65 @@ method view(menu: AppMenuState): Widget =
           
           ModelButton:
             text = "New"
+            
+            proc clicked() =
+              menu.openProject.callback(Project.new())
           
           ModelButton:
             text = "Open"
+            
+            proc clicked() =
+              let (res, state) = menu.app.open:
+                gui:
+                  FileChooserDialog:
+                    action = FileChooserOpen
+                    
+                    DialogButton {.addButton.}:
+                      text = "Open"
+                      style = [ButtonSuggested]
+                      res = DialogAccept
+                    
+                    DialogButton {.addButton.}:
+                      text = "Cancel"
+                      res = DialogCancel
+              
+              if res.kind == DialogAccept:
+                let path = FileChooserDialogState(state).filename
+                try:
+                  let project = Project.load(path)
+                  menu.openProject.callback(project)
+                except:
+                  let (res, state) = menu.app.open:
+                    gui:
+                      MessageDialog:
+                        title = "Error"
+                        message = "Unable to load project"
+                        
+                        DialogButton {.addButton.}:
+                          text = "Ok"
+                          res = DialogAccept
           
           ModelButton:
             text = "Save"
+            
+            proc clicked() =
+              let (res, state) = menu.app.open:
+                gui:
+                  FileChooserDialog:
+                    action = FileChooserSave
+                    
+                    DialogButton {.addButton.}:
+                      text = "Save"
+                      style = [ButtonSuggested]
+                      res = DialogAccept
+                    
+                    DialogButton {.addButton.}:
+                      text = "Cancel"
+                      res = DialogCancel
+              
+              if res.kind == DialogAccept:
+                let path = FileChooserDialogState(state).filename
+                menu.project.save(path)
           
           Separator()
           
@@ -1011,11 +1121,7 @@ method view(menu: ViewMenuState): Widget =
 # Main Application
 
 viewable App:
-  project: Project = Project(graphs: @[
-    Graph FunctionGraph.new("f", "x ^ 2"),
-    #Graph ImplicitGraph.new("g", "(x + y) ^ 2 + y ^ 2 - 1")
-  ])
-  
+  project: Project = Project.new()
   grid: Grid = Grid.new()
   viewport: Viewport = Viewport(height: 10.0)
   displayOptions: DisplayOptions = DisplayOptions()
@@ -1083,6 +1189,10 @@ method view(app: AppState): Widget =
             AppMenu {.addRight.}:
               project = app.project
               viewport = app.viewport
+              
+              proc openProject(project: Project) =
+                app.project = project
+                app.viewport = Viewport(height: 10.0)
             
             ViewMenu {.addRight.}:
               grid = app.grid

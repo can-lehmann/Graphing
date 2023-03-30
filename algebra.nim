@@ -524,7 +524,7 @@ proc `$`*(node: Node): string = node.stringify(0)
 
 # Parser
 
-proc parse*(source: string): Node =
+proc parse*(source: string): Node {.raises: [ValueError].} =
   # Tokenization
   
   type
@@ -623,7 +623,7 @@ proc parse*(source: string): Node =
       if stream.value == "Fn":
         result = Type(kind: TypeFunction)
   
-  proc parse(stream: var TokenStream, level: int, allowPrefix: bool = true): Node
+  proc parse(stream: var TokenStream, level: int, allowPrefix: bool = true): Node {.raises: [ValueError].}
   
   proc parseArguments(stream: var TokenStream): Option[seq[Node]] =
     if not stream.take(TokenParOpen):
