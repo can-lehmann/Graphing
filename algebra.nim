@@ -158,8 +158,9 @@ type
     NodeFloor, NodeCeil, NodeAbs,
     NodeMax, NodeMin,
     NodeLn,
+    NodeSum, NodeProd,
     NodeCall
-    NodeLambda
+    NodeLambda,
     NodeTuple,
     NodeDerive
   
@@ -283,6 +284,8 @@ proc findVariables(node: Node): HashSet[string] =
 
 # Node / Derive
 
+proc `$`*(node: Node): string
+
 proc derive*(node: Node, varName: string): Node =
   result = case node.kind:
     of NodeConst: Node.constant(0)
@@ -346,6 +349,15 @@ proc derive*(node: Node, varName: string): Node =
     of NodeLn:
       let f = node.children[0]
       f.derive(varName) / f
+    of NodeSum:
+      var lambda = node.children[2]
+      if lambda.kind != NodeLambda:
+        raise newException(ValueError, "Unable to derive " & $lambda.kind & " in sum")
+      if lambda.args[0] == varName:
+        Node.constant(0)
+      else:
+        lambda = Node.lambda(lambda.args, lambda.children[0].derive(varName))
+        Node.new(NodeSum, [node.children[0], node.children[1], lambda])
     else:
       raise newException(ValueError, "Unable to derive " & $node.kind)
 
@@ -371,6 +383,29 @@ proc asNumber*[T](value: Value[T]): T =
     raise newException(ValueError, "Value is not a number")
   result = value.number
 
+proc asInt*(value: Value[float64]): int =
+  if value.kind != ValueNumber:
+    raise newException(ValueError, "Value is not a number")
+  result = int(value.number)
+
+proc asInt*(value: Value[Inter]): int =
+  if value.kind != ValueNumber:
+    raise newException(ValueError, "Value is not a number")
+  if value.number.min != value.number.max:
+    raise newException(ValueError, "Value is not a single integer")
+  result = int(value.number.min)
+
+
+proc call*[T](callee: Value[T], args: openArray[Value[T]]): Value[T] =
+  if callee.kind != ValueFunction:
+    raise newException(ValueError, "Unable to call " & $callee.kind)
+  
+  var env = callee.closure
+  for it, arg in args:
+    env[callee.args[it]] = arg
+  
+  result = callee.body.eval(env)
+
 proc initNumber*[T](_: typedesc[Value[T]], value: T): Value[T] =
   result = Value[T](kind: ValueNumber, number: value)
 
@@ -386,6 +421,16 @@ proc initNumber*(_: typedesc[Value[Inter]], value: int): Value[Inter] =
 proc initNumber*[T](_: typedesc[Value[T]], value: int): Value[T] =
   result = Value[T].initNumber(T(value))
 
+proc sum*[T](min, max, lambda: Value[T]): Value[T] =
+  result = Value[T].initNumber(0)
+  for it in min.asInt()..max.asInt():
+    result.number = result.number + lambda.call([Value[T].initNumber(it)]).asNumber()
+
+proc prod*[T](min, max, lambda: Value[T]): Value[T] =
+  result = Value[T].initNumber(1)
+  for it in min.asInt()..max.asInt():
+    result.number = result.number * lambda.call([Value[T].initNumber(it)]).asNumber()
+
 
 proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
   case node.kind:
@@ -396,7 +441,7 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
         of "e": Value[T].initNumber(E)
         else:
           if node.name notin vars:
-            raise newException(ValueError, "Variable undefined")
+            raise newException(ValueError, "Variable \"" & node.name & "\" undefined")
           vars[node.name]
     of NaryNodes:
       let
@@ -410,6 +455,8 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
             raise newException(ValueError, "Unreachable")
       Value[T].initNumber(res)
     of UnaryNodes:
+      if node.children.len != 1:
+        raise newException(ValueError, $node.kind & " expects one argument but got " & $node.children.len)
       let
         value = node.children[0].eval(vars).asNumber()
         res = case node.kind:
@@ -426,6 +473,8 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
             raise newException(ValueError, "Unreachable")
       Value[T].initNumber(res)
     of BinaryNodes:
+      if node.children.len != 2:
+        raise newException(ValueError, $node.kind & " expects two arguments but got " & $node.children.len)
       let
         a = node.children[0].eval(vars).asNumber()
         b = node.children[1].eval(vars).asNumber()
@@ -438,24 +487,29 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
       let
         callee = node.children[0].eval(vars)
         args = node.children[1..^1].map(arg => arg.eval(vars))
-      
-      if callee.kind != ValueFunction:
-        raise newException(ValueError, "Unable to call " & $callee.kind)
-      
-      var env = callee.closure
-      for it, arg in args:
-        env[callee.args[it]] = arg
-      
-      callee.body.eval(env)
-    of NodeTuple:
-      let fields = node.children.map(child => child.eval(vars))
-      Value[T](kind: ValueTuple, fields: fields)
+      callee.call(args)
     of NodeLambda:
       Value[T](kind: ValueFunction,
         args: node.args,
         body: node.children[0],
         closure: vars
       )
+    of NodeSum, NodeProd:
+      if node.children.len != 3:
+        raise newException(ValueError, $node.kind & " expects three arguments but got " & $node.children.len)
+      let
+        min = node.children[0].eval(vars)
+        max = node.children[1].eval(vars)
+        lambda = node.children[2].eval(vars)
+      
+      case node.kind:
+        of NodeSum: sum(min, max, lambda)
+        of NodeProd: prod(min, max, lambda)
+        else:
+          raise newException(ValueError, "Unreachable")
+    of NodeTuple:
+      let fields = node.children.map(child => child.eval(vars))
+      Value[T](kind: ValueTuple, fields: fields)
     of NodeDerive:
       let function = node.children[0].eval(vars)
       
@@ -492,10 +546,14 @@ proc stringify(node: Node, level: int): string =
     NodeAbs: "abs",
     NodeMax: "max",
     NodeMin: "min",
-    NodeLn: "ln"
+    NodeLn: "ln",
+    NodeSum: "sum",
+    NodeProd: "prod"
   ]
   
-  let terms = node.children.map(child => child.stringify(LEVELS[node.kind] + 1))
+  let
+    level = if ord(node.kind) in ord(low(LEVELS))..ord(high(LEVELS)): LEVELS[node.kind] + 1 else: 0
+    terms = node.children.map(child => child.stringify(level))
   result = case node.kind:
     of NodeConst: $node.value
     of NodeVar: node.name
@@ -506,18 +564,23 @@ proc stringify(node: Node, level: int): string =
     of NodePow: terms[0] & " ^ " & terms[1]
     of NodeMod: terms[0] & " % " & terms[1]
     of NodeCall:
-      terms[0] & "(" & terms[1..^1].join(",") & ")"
+      terms[0] & "(" & terms[1..^1].join(", ") & ")"
+    of NodeLambda:
+      var args = node.args.join(", ")
+      if node.args.len != 1:
+        args = "(" & args & ")"
+      args & " -> " & terms[0]
     of NodeTuple:
       if terms.len == 1:
         "(" & terms[0] & ",)"
       else:
-        "(" & terms.join(",") & ")"
+        "(" & terms.join(", ") & ")"
     of NodeDerive:
       terms[0] & "'"
     else:
-      FUNCTION_NAMES[node.kind] & "(" & terms.join(",") & ")"
+      FUNCTION_NAMES[node.kind] & "(" & terms.join(", ") & ")"
   
-  if LEVELS[node.kind] < level:
+  if level < level:
     result = "(" & result & ")"
 
 proc `$`*(node: Node): string = node.stringify(0)
@@ -674,6 +737,8 @@ proc parse*(source: string): Node {.raises: [ValueError].} =
             Node.new(NodeReciprocal, Node.constant(nth))
           )
         of "ln": result = Node(kind: NodeLn)
+        of "sum": result = Node(kind: NodeSum)
+        of "prod": result = Node(kind: NodeProd)
         else:
           result = Node(kind: NodeVar, name: name)
           isFunction = false
@@ -804,7 +869,6 @@ when isMainModule:
         valueA = a.eval(toTable({"x": Value.initNumber(x)})).number
         valueB = b(x)
       if abs(valueA - valueB) > eps:
-        echo valueA, " ", valueB
         return false
     return true
   
@@ -946,6 +1010,23 @@ when isMainModule:
   assert equals(parse("(x -> y -> z -> x + y + z)(x)(x^2)(-2)"), x => x + x ^ 2 - 2)
   assert equals(parse("(x -> (y, z) -> x + y + z)(x)(x^2, -2)"), x => x + x ^ 2 - 2)
   assert equals(parse("(x -> f -> (f: Fn)(x))(x)(x -> x ^ 2)"), x => x ^ 2)
+  
+  # Tests / Sum
+  
+  assert equals(parse("sum(0, 10, x -> x)"), 55)
+  assert equals(parse("sum(1, 3, x -> x ^ 3)"), 1 + 8 + 27)
+  assert equals(parse("sum(10, 10, x -> x)"), 10)
+  assert equals(parse("sum(10, 9, x -> x)"), 0)
+  assert equals(parse("sum(0, 3, i -> 1)"), 4)
+  assert equals(parse("sum(0, 10, n -> (-1)^n * (x^(2n)) / (prod(1, 2n, i -> i)))"), x => cos(x), -5.0..5.0)
+  
+  # Tests / Prod
+  
+  assert equals(parse("prod(0, 10, x -> x)"), 0)
+  assert equals(parse("prod(1, 4, x -> x)"), 24)
+  assert equals(parse("prod(1, 3, x -> x ^ 3)"), 1 * 8 * 27)
+  assert equals(parse("prod(10, 10, x -> x)"), 10)
+  assert equals(parse("prod(10, 9, x -> x)"), 1)
 
   # Tests / Derive
   
@@ -968,3 +1049,8 @@ when isMainModule:
   assert equals(parse("(x -> sin(x)/cos(x))'(x)"), x => 1 / cos(x) ^ 2)
   assert equals(parse("(x -> sin(x ^ 2))'(x)"), x => cos(x ^ 2) * 2 * x)
   assert equals(parse("(x -> cos(x ^ 2))'(x)"), x => -sin(x ^ 2) * 2 * x)
+  
+  # Tests / Derive / Sum
+  assert equals(parse("(x -> sum(0, 3, i -> 1))'(x)"), x => 0.0)
+  assert equals(parse("(x -> sum(0, 3, i -> x))'(x)"), x => 4.0)
+  assert equals(parse("(x -> sum(0, 3, i -> x ^ i))'(x)"), x => 3 * x ^ 2 + 2 * x + 1)
