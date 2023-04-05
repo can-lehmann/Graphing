@@ -150,6 +150,19 @@ method view(entry: Vec2EntryState): Widget =
 
 const
   APP_NAME = "Graphing"
+  APP_VERSION = "1.0.0"
+  APP_WEBSITE = "https://github.com/can-lehmann/Graphing/"
+  APP_ISSUE_URL = APP_WEBSITE & "issues"
+  APP_COPYRIGHT = "Copyright (c) 2023 Can Joshua Lehmann"
+  APP_LICENSE = """MIT License
+
+Copyright (c) 2023 Can Joshua Lehmann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE."""
   
   BACKGROUND_COLOR = Color.rgb(0xffffff)
   GRID_COLOR = Color.rgb(0xdeddda)
@@ -953,12 +966,14 @@ method view(menu: AppMenuState): Widget =
           
           ModelButton:
             text = "New"
+            shortcut = "<Ctrl>N"
             
             proc clicked() =
               menu.openProject.callback(Project.new())
           
           ModelButton:
             text = "Open"
+            shortcut = "<Ctrl>O"
             
             proc clicked() =
               let (res, state) = menu.app.open:
@@ -993,6 +1008,7 @@ method view(menu: AppMenuState): Widget =
           
           ModelButton:
             text = "Save"
+            shortcut = "<Ctrl>S"
             
             proc clicked() =
               let (res, state) = menu.app.open:
@@ -1017,6 +1033,7 @@ method view(menu: AppMenuState): Widget =
           
           ModelButton:
             text = "Export"
+            shortcut = "<Ctrl>E"
             
             proc clicked() =
               # Show export dialog
@@ -1066,6 +1083,17 @@ method view(menu: AppMenuState): Widget =
           
           ModelButton:
             text = "About " & APP_NAME
+            
+            proc clicked() =
+              let (res, state) = menu.app.open:
+                gui:
+                  AboutWindow:
+                    applicationName = APP_NAME
+                    developerName = "Can Joshua Lehmann"
+                    version = APP_VERSION
+                    issueUrl = APP_ISSUE_URL
+                    website = APP_WEBSITE
+                    license = APP_LICENSE
 
 # Display Options
 
@@ -1206,6 +1234,7 @@ method view(app: AppState): Widget =
             Button {.addRight.}:
               icon = "zoom-in-symbolic"
               style = [ButtonFlat]
+              shortcut = "<Ctrl>plus"
               
               proc clicked() =
                 app.viewport.height /= ZOOM_SPEED
@@ -1213,6 +1242,7 @@ method view(app: AppState): Widget =
             Button {.addRight.}:
               icon = "zoom-out-symbolic"
               style = [ButtonFlat]
+              shortcut = "<Ctrl>minus"
               
               proc clicked() =
                 app.viewport.height *= ZOOM_SPEED
