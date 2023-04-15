@@ -585,6 +585,181 @@ proc stringify(node: Node, level: int): string =
 
 proc `$`*(node: Node): string = node.stringify(0)
 
+# LaTeX
+
+proc flatten(node: Node, kind: NodeKind): seq[Node] =
+  if node.kind == kind:
+    for child in node.children:
+      result.add(child.flatten(kind))
+  else:
+    result = @[node]
+
+proc toLaTeX(node: Node, level: int): string =
+  const
+    TOP_LEVEL = 0
+    ADD_LEVEL = 4
+    MUL_LEVEL = 5
+    POW_LEVEL = 6
+    CONST_LEVEL = 10
+  
+  var maxLevel = CONST_LEVEL
+  case node.kind:
+    of NodeConst:
+      if node.value < 0:
+        maxLevel = ADD_LEVEL
+      else:
+        maxLevel = CONST_LEVEL
+      result = $node.value
+    of NodeVar:
+      maxLevel = CONST_LEVEL
+      result = node.name
+    of NodeAdd:
+      maxLevel = ADD_LEVEL
+      for it, child in node.flatten(NodeAdd):
+        let (isNeg, term) = 
+          case child.kind:
+            of NodeConst:
+              if child.value < 0:
+                (true, Node.constant(-child.value))
+              else:
+                (false, child)
+            of NodeNegate: (true, child.children[0])
+            else: (false, child)
+        
+        if it != 0:
+          if isNeg:
+            result.add(" - ")
+          else:
+            result.add(" + ")
+        else:
+          if isNeg:
+            result.add("-")
+            maxLevel = TOP_LEVEL
+        
+        result.add(term.toLaTeX(if isNeg: POW_LEVEL else: ADD_LEVEL))
+    of NodeMul:
+      var
+        num: seq[Node] = @[]
+        den: seq[Node] = @[]
+      for child in node.flatten(NodeMul):
+        if child.kind == NodeReciprocal:
+          den.add(child.children[0])
+        else:
+          num.add(child)
+      
+      if den.len > 0:
+        let
+          top = Node.new(NodeMul, num).toLaTeX(TOP_LEVEL)
+          bottom = Node.new(NodeMul, den).toLaTeX(TOP_LEVEL)
+        
+        maxLevel = CONST_LEVEL
+        result = "\\frac{" & top & "}{" & bottom & "}"
+      else:
+        case num.len:
+          of 0:
+            maxLevel = CONST_LEVEL
+            result = "1"
+          of 1: 
+            maxLevel = CONST_LEVEL
+            result = num[0].toLaTeX(level)
+          else:
+            maxLevel = MUL_LEVEL
+            result = num
+              .map(child => child.toLaTeX(MUL_LEVEL))
+              .join(" \\cdot ")
+    of NodeNegate:
+      maxLevel = 0
+      result = "-" & node.children[0].toLaTeX(CONST_LEVEL)
+    of NodeReciprocal:
+      maxLevel = 10
+      result = "\\frac{1}{" & node.children[0].toLaTeX(TOP_LEVEL) & "}"
+    of NodePow:
+      let
+        base = node.children[0].toLaTeX(CONST_LEVEL)
+        exp = node.children[1].toLaTeX(TOP_LEVEL)
+      maxLevel = POW_LEVEL
+      result = "{" & base & "} ^ {" & exp & "}"
+    of NodeMod:
+      maxLevel = MUL_LEVEL
+      result = node.children[0].toLaTeX(MUL_LEVEL) &
+               " \\mathrm{mod} " &
+               node.children[0].toLaTeX(CONST_LEVEL)
+    of NodeSin, NodeCos, NodeTan, NodeMin, NodeMax, NodeLn:
+      let
+        name = case node.kind:
+          of NodeSin: "\\sin"
+          of NodeCos: "\\cos"
+          of NodeTan: "\\tan"
+          of NodeMin: "\\min"
+          of NodeMax: "\\max"
+          of NodeLn: "\\ln"
+          else: raise newException(ValueError, "Unreachable")
+        args = node.children
+          .map(child => child.toLaTeX(TOP_LEVEL))
+          .join(", ")
+      
+      maxLevel = CONST_LEVEL
+      result = name & "(" & args & ")"
+    of NodeFloor, NodeCeil, NodeAbs:
+      let (left, right) = case node.kind:
+        of NodeFloor: ("\\lfloor ", " \\rfloor")
+        of NodeCeil: ("\\lceil ", " \\rceil")
+        of NodeAbs: ("|", "|")
+        else: raise newException(ValueError, "Unreachable")
+      
+      maxLevel = CONST_LEVEL
+      result = left & node.children[0].toLaTeX(TOP_LEVEL) & right
+    of NodeSum, NodeProd:
+      let symbol = case node.kind:
+        of NodeSum: "\\sum"
+        of NodeProd: "\\prod"
+        else: raise newException(ValueError, "Unreachable")
+      
+      if node.children[2].kind == NodeLambda:
+        let
+          iter = node.children[2].args[0]
+          init = iter & " = " & node.children[0].toLaTeX(TOP_LEVEL)
+          stop = node.children[1].toLaTeX(TOP_LEVEL)
+          body = node.children[2].children[0].toLaTeX(POW_LEVEL)
+        
+        maxLevel = CONST_LEVEL
+        result = symbol & "_{" & init & "}^{" & stop & "} " & body
+      else:
+        raise newException(ValueError, "Unable to generate LaTeX")
+    of NodeCall:
+      let
+        callee = node.children[0].toLaTeX(CONST_LEVEL)
+        args = node.children[1..^1]
+          .map(child => child.toLaTeX(TOP_LEVEL))
+          .join(", ")
+      
+      result = callee & "(" & args & ")"
+    of NodeLambda:
+      var args = node.args.join(", ")
+      if node.args.len != 1:
+        args = "(" & args & ")"
+      
+      let body = node.children[0].toLaTeX(TOP_LEVEL)
+      
+      maxLevel = TOP_LEVEL
+      result = args & " \\rightarrow " & body
+    of NodeTuple:
+      let items = node.children
+        .map(child => child.toLaTeX(TOP_LEVEL))
+        .join(", ")
+      
+      maxLevel = CONST_LEVEL
+      result = "(" & items & ")"
+    of NodeDerive:
+      maxLevel = CONST_LEVEL
+      result = node.children[0].toLaTeX(CONST_LEVEL) & "'"
+  
+  if level > maxLevel:
+    result = "(" & result & ")"
+
+proc toLaTeX*(node: Node): string =
+  result = node.toLaTeX(0)
+
 # Parser
 
 proc parse*(source: string): Node {.raises: [ValueError].} =
@@ -1054,3 +1229,37 @@ when isMainModule:
   assert equals(parse("(x -> sum(0, 3, i -> 1))'(x)"), x => 0.0)
   assert equals(parse("(x -> sum(0, 3, i -> x))'(x)"), x => 4.0)
   assert equals(parse("(x -> sum(0, 3, i -> x ^ i))'(x)"), x => 3 * x ^ 2 + 2 * x + 1)
+  
+  # Tests / LaTeX
+  
+  # Tests / LaTeX / Base
+  assert parse("a + b * c").toLaTeX() == "a + b \\cdot c"
+  assert parse("(a + b) * c").toLaTeX() == "(a + b) \\cdot c"
+  
+  # Tests / LaTeX / Add
+  assert parse("a + b + c").toLaTeX() == "a + b + c"
+  assert parse("a - b - c").toLaTeX() == "a - b - c"
+  assert parse("-a - b - c").toLaTeX() == "-a - b - c"
+  assert parse("a + (-b) + (-c) + d").toLaTeX() == "a - b - c + d"
+  assert parse("a - (b + c) - d").toLaTeX() == "a - (b + c) - d"
+  assert parse("-(b + c) - d").toLaTeX() == "-(b + c) - d"
+  assert parse("(b + c) - d").toLaTeX() == "b + c - d"
+  
+  # Tests / LaTeX / Mul
+  assert parse("(a + b) * c / d / e").toLaTeX() == "\\frac{(a + b) \\cdot c}{d \\cdot e}"
+  assert parse("(a + b) * c / (d * e) / f").toLaTeX() == "\\frac{(a + b) \\cdot c}{d \\cdot e \\cdot f}"
+  assert parse("a / (b / c)").toLaTeX() == "\\frac{a}{\\frac{b}{c}}"
+  
+  # Tests / LaTeX / Pow
+  assert parse("x ^ 2").toLaTeX() == "{x} ^ {2}"
+  assert parse("(3 * x) ^ (2 + x)").toLaTeX() == "{(3 \\cdot x)} ^ {2 + x}"
+  
+  # Tests / LaTeX / Sum
+  assert parse("sum(0, 3, n -> x^n)").toLaTeX() == "\\sum_{n = 0}^{3} {x} ^ {n}"
+  assert parse("sum(0, 10, n -> 1 / 2^n)").toLaTeX() == "\\sum_{n = 0}^{10} \\frac{1}{{2} ^ {n}}"
+  
+  # Tests / LaTeX / Prod
+  assert parse("prod(1, 4, x -> x)").toLaTeX() == "\\prod_{x = 1}^{4} x"
+  
+  # Tests / LaTeX / Lambda
+  assert parse("(x -> x ^ 2)'(x)").toLaTeX() == "(x \\rightarrow {x} ^ {2})'(x)"

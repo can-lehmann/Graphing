@@ -146,6 +146,29 @@ method view(entry: Vec2EntryState): Widget =
           if not entry.changed.isNil:
             entry.changed.callback(entry.value)
 
+# Utilities / CopyButton
+
+viewable CopyButton:
+  tooltip: string
+  isCopied: bool = false
+  
+  proc copy(): string
+
+method view(button: CopyButtonState): Widget =
+  result = gui:
+    Button:
+      if button.isCopied:
+        icon = "emblem-ok-symbolic"
+      else:
+        icon = "edit-copy-symbolic"
+      
+      tooltip = button.tooltip
+      
+      proc clicked() =
+        let text = button.copy.callback()
+        button.writeClipboard(text)
+        button.isCopied = true
+
 # Config
 
 const
@@ -358,6 +381,22 @@ method view(graph: FunctionGraph): Widget =
                   useAlpha = true
                   proc changed(color: Color) =
                     graph.color = color
+            
+            Box:
+              orient = OrientX
+              spacing = 6
+              margin = Margin(top: 6)
+              
+              CopyButton:
+                tooltip = "Copy LaTeX"
+                
+                proc copy(): string =
+                  graph.tree.toLaTeX()
+              
+              Button:
+                icon = "user-trash-symbolic"
+                tooltip = "Delete Graph"
+              
 
 method trace(graph: FunctionGraph, pos: Vec2): Trace =
   if graph.tree.isNil:
@@ -768,6 +807,7 @@ method view(preferences: ViewportPreferencesState): Widget =
       Button {.addSuffix.}:
         icon = "zoom-fit-best-symbolic"
         style = [ButtonFlat]
+        tooltip = "Reset Viewport"
         
         proc clicked() =
           viewport.center = Vec2()
@@ -1176,6 +1216,7 @@ method view(app: AppState): Widget =
             SplitButton {.addLeft.}:
               icon = "list-add"
               style = [ButtonFlat]
+              tooltip = "Add Graph"
               
               PopoverMenu:
                 Box:
@@ -1235,6 +1276,7 @@ method view(app: AppState): Widget =
               icon = "zoom-in-symbolic"
               style = [ButtonFlat]
               shortcut = "<Ctrl>plus"
+              tooltip = "Zoom In"
               
               proc clicked() =
                 app.viewport.height /= ZOOM_SPEED
@@ -1243,6 +1285,7 @@ method view(app: AppState): Widget =
               icon = "zoom-out-symbolic"
               style = [ButtonFlat]
               shortcut = "<Ctrl>minus"
+              tooltip = "Zoom Out"
               
               proc clicked() =
                 app.viewport.height *= ZOOM_SPEED
