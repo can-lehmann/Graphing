@@ -70,6 +70,20 @@ proc sin*(x: Inter): Inter = Inter(min: -1.0, max: 1.0) # TODO
 proc cos*(x: Inter): Inter = Inter(min: -1.0, max: 1.0) # TODO
 proc tan*(x: Inter): Inter = Inter(min: -Inf, max: Inf) # TODO
 
+proc arcsin*(x: Inter): Inter =
+  Inter(
+    min: arcsin(clamp(x.min, -1, 1)),
+    max: arcsin(clamp(x.max, -1, 1))
+  )
+
+proc arccos*(x: Inter): Inter =
+  Inter(
+    min: arccos(clamp(x.max, -1, 1)),
+    max: arccos(clamp(x.min, -1, 1))
+  )
+
+proc arctan*(x: Inter): Inter = Inter(min: arctan(x.min), max: arctan(x.max))
+
 proc floor*(a: Inter): Inter =
   Inter(min: floor(a.min), max: floor(a.max))
 
@@ -155,6 +169,7 @@ type
     NodeNegate, NodeReciprocal,
     NodePow, NodeMod,
     NodeSin, NodeCos, NodeTan,
+    NodeArcSin, NodeArcCos, NodeArcTan,
     NodeFloor, NodeCeil, NodeAbs,
     NodeMax, NodeMin,
     NodeLn,
@@ -182,6 +197,7 @@ const
   UnaryNodes = {
     NodeNegate, NodeReciprocal,
     NodeSin, NodeCos, NodeTan,
+    NodeArcSin, NodeArcCos, NodeArcTan,
     NodeFloor, NodeCeil, NodeAbs,
     NodeLn
   }
@@ -465,6 +481,9 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
           of NodeSin: sin(value)
           of NodeCos: cos(value)
           of NodeTan: tan(value)
+          of NodeArcSin: arcsin(value)
+          of NodeArcCos: arccos(value)
+          of NodeArcTan: arctan(value)
           of NodeFloor: floor(value)
           of NodeCeil: ceil(value)
           of NodeAbs: abs(value)
@@ -541,6 +560,9 @@ proc stringify(node: Node, level: int): string =
     NodeSin: "sin",
     NodeCos: "cos",
     NodeTan: "tan",
+    NodeArcSin: "arcsin",
+    NodeArcCos: "arccos",
+    NodeArcTan: "arctan",
     NodeFloor: "floor",
     NodeCeil: "ceil",
     NodeAbs: "abs",
@@ -684,12 +706,17 @@ proc toLaTeX(node: Node, level: int): string =
       result = node.children[0].toLaTeX(MUL_LEVEL) &
                " \\mathrm{mod} " &
                node.children[0].toLaTeX(CONST_LEVEL)
-    of NodeSin, NodeCos, NodeTan, NodeMin, NodeMax, NodeLn:
+    of NodeSin, NodeCos, NodeTan, 
+       NodeArcSin, NodeArcCos, NodeArcTan, 
+       NodeMin, NodeMax, NodeLn:
       let
         name = case node.kind:
           of NodeSin: "\\sin"
           of NodeCos: "\\cos"
           of NodeTan: "\\tan"
+          of NodeArcSin: "\\arcsin"
+          of NodeArcCos: "\\arccos"
+          of NodeArcTan: "\\arctan"
           of NodeMin: "\\min"
           of NodeMax: "\\max"
           of NodeLn: "\\ln"
@@ -896,6 +923,9 @@ proc parse*(source: string): Node {.raises: [ValueError].} =
         of "sin": result = Node(kind: NodeSin)
         of "cos": result = Node(kind: NodeCos)
         of "tan": result = Node(kind: NodeTan)
+        of "asin", "arcsin": result = Node(kind: NodeArcSin)
+        of "acos", "arccos": result = Node(kind: NodeArcCos)
+        of "atan", "arctan": result = Node(kind: NodeArcTan)
         of "floor": result = Node(kind: NodeFloor)
         of "ceil": result = Node(kind: NodeCeil)
         of "abs": result = Node(kind: NodeAbs)
@@ -1107,6 +1137,12 @@ when isMainModule:
   assert equals(parse("sin(2pi)"), 0)
   assert equals(parse("sin(2pi + x)"), parse("sin(x)"))
   
+  assert equals(parse("arcsin(x)"), arcsin, domain = -1.0..1.0)
+  assert equals(parse("asin(x)"), arcsin, domain = -1.0..1.0)
+  assert equals(parse("arcsin(0)"), 0)
+  assert equals(parse("arcsin(1)"), PI / 2)
+  assert equals(parse("arcsin(-1)"), -PI / 2)
+  
   # Tests / Cos
   
   assert equals(parse("cos(x)"), cos)
@@ -1117,9 +1153,19 @@ when isMainModule:
   assert equals(parse("cos(2pi)"), 1)
   assert equals(parse("cos(2pi + x)"), parse("cos(x)"))
   
+  assert equals(parse("arccos(x)"), arccos, domain = -1.0..1.0)
+  assert equals(parse("acos(x)"), arccos, domain = -1.0..1.0)
+  assert equals(parse("arccos(1)"), 0)
+  assert equals(parse("arccos(0)"), PI / 2)
+  assert equals(parse("arccos(-1)"), PI)
+  
   # Tests / Tan
   
   assert equals(parse("tan(x)"), tan)
+  
+  assert equals(parse("arctan(x)"), arctan)
+  assert equals(parse("atan(x)"), arctan)
+  assert equals(parse("tan(arctan(x))"), (x: float64) => x)
   
   # Tests / Floor
   
