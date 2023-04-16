@@ -636,29 +636,37 @@ proc toLaTeX(node: Node, level: int): string =
       maxLevel = CONST_LEVEL
       result = node.name
     of NodeAdd:
-      maxLevel = ADD_LEVEL
-      for it, child in node.flatten(NodeAdd):
-        let (isNeg, term) = 
-          case child.kind:
-            of NodeConst:
-              if child.value < 0:
-                (true, Node.constant(-child.value))
-              else:
-                (false, child)
-            of NodeNegate: (true, child.children[0])
-            else: (false, child)
-        
-        if it != 0:
-          if isNeg:
-            result.add(" - ")
-          else:
-            result.add(" + ")
+      case node.children.len:
+        of 0:
+          maxLevel = CONST_LEVEL
+          result = "0"
+        of 1:
+          maxLevel = CONST_LEVEL
+          result = node.children[0].toLaTeX(level)
         else:
-          if isNeg:
-            result.add("-")
-            maxLevel = TOP_LEVEL
-        
-        result.add(term.toLaTeX(if isNeg: POW_LEVEL else: ADD_LEVEL))
+          maxLevel = ADD_LEVEL
+          for it, child in node.flatten(NodeAdd):
+            let (isNeg, term) = 
+              case child.kind:
+                of NodeConst:
+                  if child.value < 0:
+                    (true, Node.constant(-child.value))
+                  else:
+                    (false, child)
+                of NodeNegate: (true, child.children[0])
+                else: (false, child)
+            
+            if it != 0:
+              if isNeg:
+                result.add(" - ")
+              else:
+                result.add(" + ")
+            else:
+              if isNeg:
+                result.add("-")
+                maxLevel = TOP_LEVEL
+            
+            result.add(term.toLaTeX(if isNeg: POW_LEVEL else: ADD_LEVEL))
     of NodeMul:
       var
         num: seq[Node] = @[]
@@ -728,6 +736,9 @@ proc toLaTeX(node: Node, level: int): string =
       maxLevel = CONST_LEVEL
       result = name & "(" & args & ")"
     of NodeFloor, NodeCeil, NodeAbs:
+      if node.children.len != 1:
+        raise newException(ValueError, $node.kind & " expects one argument but got " & $node.children.len)
+      
       let (left, right) = case node.kind:
         of NodeFloor: ("\\lfloor ", " \\rfloor")
         of NodeCeil: ("\\lceil ", " \\rceil")
@@ -737,6 +748,9 @@ proc toLaTeX(node: Node, level: int): string =
       maxLevel = CONST_LEVEL
       result = left & node.children[0].toLaTeX(TOP_LEVEL) & right
     of NodeSum, NodeProd:
+      if node.children.len != 3:
+        raise newException(ValueError, $node.kind & " expects three arguments but got " & $node.children.len)
+      
       let symbol = case node.kind:
         of NodeSum: "\\sum"
         of NodeProd: "\\prod"

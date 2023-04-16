@@ -148,26 +148,36 @@ method view(entry: Vec2EntryState): Widget =
 
 # Utilities / CopyButton
 
+type CopyState = enum
+  CopyInitial,
+  CopySuccess,
+  CopyFailure
+
 viewable CopyButton:
   tooltip: string
-  isCopied: bool = false
+  sensitive: bool = true
+  state: CopyState = CopyInitial
   
   proc copy(): string
 
 method view(button: CopyButtonState): Widget =
   result = gui:
     Button:
-      if button.isCopied:
-        icon = "emblem-ok-symbolic"
-      else:
-        icon = "edit-copy-symbolic"
+      case button.state:
+        of CopyInitial: icon = "edit-copy-symbolic"
+        of CopySuccess: icon = "emblem-ok-symbolic"
+        of CopyFailure: icon = "dialog-error-symbolic"
       
       tooltip = button.tooltip
+      sensitive = button.sensitive
       
       proc clicked() =
-        let text = button.copy.callback()
-        button.writeClipboard(text)
-        button.isCopied = true
+        try:
+          let text = button.copy.callback()
+          button.writeClipboard(text)
+          button.state = CopySuccess
+        except CatchableError:
+          button.state = CopyFailure
 
 # Config
 
@@ -389,9 +399,10 @@ method view(graph: FunctionGraph): Widget =
               
               CopyButton:
                 tooltip = "Copy LaTeX"
+                sensitive = not graph.tree.isNil
                 
                 proc copy(): string =
-                  graph.tree.toLaTeX()
+                  result = graph.tree.toLaTeX()
               
               Button:
                 icon = "user-trash-symbolic"
@@ -1035,7 +1046,7 @@ method view(menu: AppMenuState): Widget =
                 try:
                   let project = Project.load(path)
                   menu.openProject.callback(project)
-                except:
+                except CatchableError:
                   let (res, state) = menu.app.open:
                     gui:
                       MessageDialog:
