@@ -25,7 +25,7 @@ A simple graphing application built with owlkettle.
 nimble install https://github.com/can-lehmann/Graphing
 ```
 
-## Building from source
+### Building from source
 
 ```bash
 git clone https://github.com/can-lehmann/Graphing
