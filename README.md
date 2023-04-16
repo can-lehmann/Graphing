@@ -22,11 +22,15 @@ A simple graphing application built with owlkettle.
 ## Installation
 
 ```bash
-$ git clone https://github.com/can-lehmann/Graphing.git
-$ cd Graphing
-$ nimble install owlkettle@#head
-$ nimble install geometrymath
-$ nim compile -r -d:adwaita12 -d:release main
+nimble install https://github.com/can-lehmann/Graphing
+```
+
+## Building from source
+
+```bash
+git clone https://github.com/can-lehmann/Graphing
+cd Graphing
+nimble build
 ```
 
 ## License
