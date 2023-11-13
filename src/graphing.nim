@@ -21,9 +21,9 @@
 # SOFTWARE.
 
 import std/[tables, sets, sequtils, sugar, strformat, strutils, random, math, os, json]
+import algebra
 import owlkettle, owlkettle/[adw, cairo, dataentries]
 import geometrymath
-import algebra
 
 # Utilities
 

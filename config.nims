@@ -1,1 +1,1 @@
---define:adwaita12
+--d:"adwminor=2"
