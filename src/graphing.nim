@@ -294,8 +294,15 @@ method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.
   if screenX > 0:
     screenX -= STEP_SIZE
     
-  var isStart = true
+  var
+    isStart = true
+    isOffscreen = false
+    prev = Vec2()
+  
   while screenX < view.size.x + STEP_SIZE:
+    defer: 
+      screenX += STEP_SIZE
+    
     let
       x = view.mapReverse(Vec2(x: screenX)).x
       y = graph.tree.eval(toTable({"x": Value.initNumber(x)})).asNumber()
@@ -304,16 +311,29 @@ method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.
     
     if isNaN(pos.y) or isInf(pos.y):
       isStart = true
-      screenX += STEP_SIZE
       continue
     
+    let wasOffscreen = isOffscreen
+    if pos.y < 0 or pos.y >= view.size.y:
+      isOffscreen = true
+      if wasOffscreen and (prev.y < 0) == (pos.y < 0):
+        isStart = true
+        prev = pos
+        continue
+    else:
+      isOffscreen = false
+    
     if isStart:
-      ctx.moveTo(pos)
+      if wasOffscreen:
+        ctx.moveTo(prev)
+        ctx.lineTo(pos)
+      else:
+        ctx.moveTo(pos)
       isStart = false
     else:
       ctx.lineTo(pos)
     
-    screenX += STEP_SIZE
+    prev = pos
 
 method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
   if graph.tree.isNil:
@@ -1145,6 +1165,7 @@ method view(menu: AppMenuState): Widget =
                     version = APP_VERSION
                     issueUrl = APP_ISSUE_URL
                     website = APP_WEBSITE
+                    licenseType = LicenseCustom
                     license = APP_LICENSE
 
 # Display Options
