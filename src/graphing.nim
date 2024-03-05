@@ -300,12 +300,13 @@ method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.
       x = view.mapReverse(Vec2(x: screenX)).x
       y = graph.tree.eval(toTable({"x": Value.initNumber(x)})).asNumber()
     
-    if isNaN(y) or isInf(y):
+    let pos = view.map(Vec2(x: x, y: y))
+    
+    if isNaN(pos.y) or isInf(pos.y):
       isStart = true
       screenX += STEP_SIZE
       continue
     
-    let pos = view.map(Vec2(x: x, y: y))
     if isStart:
       ctx.moveTo(pos)
       isStart = false
@@ -1211,7 +1212,7 @@ viewable App:
 
 method view(app: AppState): Widget =
   result = gui:
-    WindowSurface:
+    AdwWindow:
       defaultSize = (1200, 700)
     
       Box:
