@@ -224,8 +224,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 type Graph = ref object of RootObj
   name: string
 
-method draw(graph: Graph, view: Viewport, ctx: CairoContext) {.base.} = discard
+method draw(graph: Graph, closure: Closure[float], view: Viewport, ctx: CairoContext) {.base.} = discard
 method view(graph: Graph): Widget {.base.} = discard
+method define(graph: Graph, closure: Closure[float]) {.base.} = discard
 method `%`(graph: Graph): JsonNode {.base.} = discard
 method fromJson(graph: Graph, node: JsonNode) {.base, raises: [ValueError].} = discard
 
@@ -284,10 +285,19 @@ proc new(_: typedesc[FunctionGraph],
   if text.len > 0:
     result.tree = text.parse()
 
-method title(graph: FunctionGraph): string {.base.} =
-  result = graph.name & "(x)"
+method args(graph: FunctionGraph): seq[string] {.base.} =
+  result = @["x"]
 
-method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.} =
+method define(graph: FunctionGraph, closure: Closure[float]) =
+  if not graph.tree.isNil:
+    closure.vars[graph.name] = Value[float](
+      kind: ValueFunction,
+      args: graph.args(),
+      body: graph.tree,
+      closure: closure
+    )
+
+method drawPath(graph: FunctionGraph, closure: Closure[float], view: Viewport, ctx: CairoContext) {.base.} =
   const STEP_SIZE = 5.0
   
   var screenX = view.map(Vec2()).x mod STEP_SIZE
@@ -298,14 +308,15 @@ method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.
     isStart = true
     isOffscreen = false
     prev = Vec2()
+    vars = closure.vars
   
   while screenX < view.size.x + STEP_SIZE:
     defer: 
       screenX += STEP_SIZE
     
-    let
-      x = view.mapReverse(Vec2(x: screenX)).x
-      y = graph.tree.eval(toTable({"x": Value.initNumber(x)})).asNumber()
+    let x = view.mapReverse(Vec2(x: screenX)).x
+    vars["x"] = Value.initNumber(x)
+    let y = graph.tree.eval(vars).asNumber()
     
     let pos = view.map(Vec2(x: x, y: y))
     
@@ -335,12 +346,12 @@ method drawPath(graph: FunctionGraph, view: Viewport, ctx: CairoContext) {.base.
     
     prev = pos
 
-method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
+method draw(graph: FunctionGraph, closure: Closure[float], view: Viewport, ctx: CairoContext) =
   if graph.tree.isNil:
     return
   
   try:
-    graph.drawPath(view, ctx)
+    graph.drawPath(closure, view, ctx)
     graph.error = false
   except CatchableError as err:
     echo err.msg
@@ -353,7 +364,7 @@ method draw(graph: FunctionGraph, view: Viewport, ctx: CairoContext) =
 method view(graph: FunctionGraph): Widget =
   result = gui:
     EntryRow:
-      title = graph.title()
+      title = graph.name & "(" & graph.args().join(", ") & ")"
       text = graph.text
       
       if graph.tree.isNil or graph.error:
@@ -473,17 +484,19 @@ proc new(_: typedesc[PolarGraph],
   if text.len > 0:
     result.tree = text.parse()
 
-method title(graph: PolarGraph): string =
-  result = graph.name & "(phi)"
+method args(graph: PolarGraph): seq[string] =
+  result = @["phi"]
 
-method drawPath(graph: PolarGraph, view: Viewport, ctx: CairoContext) =
+method drawPath(graph: PolarGraph, closure: Closure[float], view: Viewport, ctx: CairoContext) =
   const STEPS = 128
+  
+  var vars = closure.vars
   
   var isStart = true
   for it in 0..STEPS:
-    let
-      phi = 2.0 * PI * (it / STEPS)
-      r = graph.tree.eval(toTable({"phi": Value.initNumber(phi)})).asNumber()
+    let phi = 2.0 * PI * (it / STEPS)
+    vars["phi"] = Value.initNumber(phi)
+    let r = graph.tree.eval(vars).asNumber()
     
     if isNaN(r) or isInf(r):
       isStart = true
@@ -531,10 +544,10 @@ proc new(_: typedesc[ImplicitGraph],
   if text.len > 0:
     result.tree = text.parse()
 
-method title(graph: ImplicitGraph): string =
-  result = graph.name & "(x, y) = 0"
+method args(graph: ImplicitGraph): seq[string] =
+  result = @["x", "y"]
 
-method draw(graph: ImplicitGraph, view: Viewport, ctx: CairoContext) =
+method draw(graph: ImplicitGraph, closure: Closure[float], view: Viewport, ctx: CairoContext) =
   if graph.tree.isNil:
     return
   
@@ -735,8 +748,12 @@ method view(graphView: GraphViewState): Widget =
         
         graphView.grid.draw(view, ctx)
         
+        let closure = Closure[float]()
         for graph in graphView.graphs:
-          graph.draw(view, ctx)
+          graph.define(closure)
+        
+        for graph in graphView.graphs:
+          graph.draw(closure, view, ctx)
         
         if graphView.tracing:
           for graph in graphView.graphs:
@@ -937,8 +954,12 @@ proc renderPixbuf(dialog: ExportDialogState): Pixbuf =
   view.updateRegion()
   dialog.grid.draw(view, ctx)
   
+  let closure = Closure[float]()
   for graph in dialog.project.graphs:
-    graph.draw(view, ctx)
+    graph.define(closure)
+  
+  for graph in dialog.project.graphs:
+    graph.draw(closure, view, ctx)
   
   let
     pixelCount = surface.width * surface.height

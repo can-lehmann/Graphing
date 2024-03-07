@@ -383,16 +383,19 @@ type
   ValueKind = enum
     ValueNumber, ValueFunction, ValueTuple
   
+  Closure*[T] = ref object
+    vars*: Table[string, Value[T]]
+  
   Value*[T] = object
-    case kind: ValueKind:
+    case kind*: ValueKind:
       of ValueNumber:
-        number: T
+        number*: T
       of ValueFunction:
-        args: seq[string]
-        body: Node
-        closure: Table[string, Value[T]]
+        args*: seq[string]
+        body*: Node
+        closure*: Closure[T]
       of ValueTuple:
-        fields: seq[Value[T]]
+        fields*: seq[Value[T]]
 
 proc asNumber*[T](value: Value[T]): T =
   if value.kind != ValueNumber:
@@ -416,7 +419,7 @@ proc call*[T](callee: Value[T], args: openArray[Value[T]]): Value[T] =
   if callee.kind != ValueFunction:
     raise newException(ValueError, "Unable to call " & $callee.kind)
   
-  var env = callee.closure
+  var env = callee.closure.vars
   for it, arg in args:
     env[callee.args[it]] = arg
   
@@ -511,7 +514,7 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
       Value[T](kind: ValueFunction,
         args: node.args,
         body: node.children[0],
-        closure: vars
+        closure: Closure[T](vars: vars)
       )
     of NodeSum, NodeProd:
       if node.children.len != 3:
