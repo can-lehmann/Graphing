@@ -349,7 +349,7 @@ proc derive*(node: Node, varName: string): Node =
         g = node.children[1]
       
       if g.isConst():
-        g * f ^ (g - Node.constant(1))
+        g * f ^ (g - Node.constant(1)) * f.derive(varName)
       else:
         f ^ g * (ln(f) * g.derive(varName) + f.derive(varName) / f * g)
     of NodeMod:
@@ -374,6 +374,14 @@ proc derive*(node: Node, varName: string): Node =
       else:
         lambda = Node.lambda(lambda.args, lambda.children[0].derive(varName))
         Node.new(NodeSum, [node.children[0], node.children[1], lambda])
+    of NodeCall:
+      if node.children.len != 2:
+        raise newException(ValueError, "Unable to derive multivariate functions")
+      
+      let
+        f = node.children[0]
+        x = node.children[1]
+      Node.call(Node.derive(f), @[x]) * x.derive(varName)
     else:
       raise newException(ValueError, "Unable to derive " & $node.kind)
 
@@ -1091,6 +1099,7 @@ when isMainModule:
         valueA = a.eval(toTable({"x": Value.initNumber(x)})).number
         valueB = b(x)
       if abs(valueA - valueB) > eps:
+        echo valueA, " ", valueB
         return false
     return true
   
@@ -1273,6 +1282,7 @@ when isMainModule:
   assert equals(parse("(x -> x ^ 2)'(x)"), x => 2 * x)
   assert equals(parse("(x -> x ^ 3 - 2x)'(x)"), x => 3 * x^2 - 2)
   assert equals(parse("(x -> x * x * x - 2x^2 / x)'(x)"), x => 3 * x^2 - 2)
+  assert equals(parse("(x -> (x ^ 2) ^ 2)'(x)"), x => 4 * x^3)
   
   # Tests / Derive / Exponential
   assert equals(parse("(x -> x ^ 10)'(x)"), x => 10 * x ^ 9)
@@ -1292,6 +1302,16 @@ when isMainModule:
   assert equals(parse("(x -> sum(0, 3, i -> 1))'(x)"), x => 0.0)
   assert equals(parse("(x -> sum(0, 3, i -> x))'(x)"), x => 4.0)
   assert equals(parse("(x -> sum(0, 3, i -> x ^ i))'(x)"), x => 3 * x ^ 2 + 2 * x + 1)
+  
+  # Tests / Derive / Call
+  assert equals(parse("(x -> (y -> y ^ 2)(x))'(x)"), x => 2 * x)
+  assert equals(parse("(x -> (y -> y ^ 2)(x) + 1)'(x)"), x => 2 * x)
+  assert equals(parse("(x -> (y -> y ^ 2)(x ^ 2))'(x)"), x => 4 * x ^ 3)
+  assert equals(parse("(x -> (y -> y ^ 2)(x + 1))'(x)"), x => 2 * x + 2)
+  assert equals(parse("(x -> (y -> y ^ 2)(x + 1) + (y -> y ^ 3)(x))'(x)"), x => 2 * x + 2 + 3 * x ^ 2)
+  assert equals(parse("(x -> ((y -> y)(x)) ^ 2)'(x)"), x => 2 * x)
+  assert equals(parse("(x -> ((y -> y ^ 2)(x)) * ((y -> y ^ 2)(x)))'(x)"), x => 4 * x ^ 3)
+  assert equals(parse("(x -> ((y -> y ^ 2)(x)) ^ 2)'(x)"), x => 4 * x ^ 3)
   
   # Tests / LaTeX
   
