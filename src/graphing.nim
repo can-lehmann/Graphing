@@ -428,7 +428,6 @@ method view(graph: FunctionGraph): Widget =
               Button:
                 icon = "user-trash-symbolic"
                 tooltip = "Delete Graph"
-              
 
 method trace(graph: FunctionGraph, pos: Vec2): Trace =
   if graph.tree.isNil:
@@ -1236,15 +1235,22 @@ method view(app: AppState): Widget =
     AdwWindow:
       defaultSize = (1200, 700)
     
-      Box:
-        orient = OrientX
-        
-        Box {.expand: false.}:
+      OverlaySplitView:
+        Box {.addSidebar.}:
           orient = OrientY
           sizeRequest = (330, -1)
           
           HeaderBar {.expand: false.}:
             showTitleButtons = false
+            style = HeaderBarFlat
+            
+            WindowTitle {.addTitle.}:
+              title = APP_NAME
+              
+              if app.project.path.len == 0:
+                subtitle = $app.project.graphs.len & " graphs"
+              else:
+                subtitle = $app.project.path
             
             SplitButton {.addLeft.}:
               icon = "list-add"
@@ -1278,19 +1284,10 @@ method view(app: AppState): Widget =
               for graph in app.project.graphs:
                 insert(graph.view())
         
-        Separator() {.expand: false.}
-        
         Box:
           orient = OrientY
           
           HeaderBar {.expand: false.}:
-            WindowTitle {.addTitle.}:
-              title = APP_NAME
-              
-              if app.project.path.len == 0:
-                subtitle = $app.project.graphs.len & " graphs"
-              else:
-                subtitle = $app.project.path
             
             AppMenu {.addRight.}:
               project = app.project
