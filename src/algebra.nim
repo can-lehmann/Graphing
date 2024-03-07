@@ -116,6 +116,33 @@ proc pow*(a, b: Inter): Inter =
 
 proc `mod`*(a, b: Inter): Inter =
   Inter(min: -b.max, max: b.max) # TODO
+
+proc cond*(cond, a, b: Inter): Inter =
+  if cond == Inter():
+    b
+  elif 0.0 in cond:
+    Inter(
+      min: min(a.min, b.min),
+      max: max(a.max, b.max)
+    )
+  else:
+    a
+
+proc lt*(a, b: Inter): Inter =
+  if a.max < b.min:
+    Inter(min: 1.0, max: 1.0)
+  elif a.min >= b.max:
+    Inter(min: 0.0, max: 0.0)
+  else:
+    Inter(min: 0.0, max: 1.0)
+
+proc `not`*(x: Inter): Inter =
+  if x == Inter():
+    Inter(min: 1.0, max: 1.0)
+  elif 0.0 in x:
+    Inter(min: 0.0, max: 1.0)
+  else:
+    Inter(min: 0.0, max: 0.0)
 {.pop.}
 
 proc prod*(inters: openArray[Inter]): Inter =
@@ -139,6 +166,21 @@ proc max*(inters: openArray[Inter]): Inter =
 
 proc reciprocal*(x: float64): float64 =
   1.0 / x
+
+proc cond*(cond, a, b: float64): float64 =
+  if cond != 0:
+    a
+  else:
+    b
+
+proc lt*(a, b: float64): float64 =
+  float64(a < b)
+
+proc `not`*(x: float64): float64 =
+  if x != 0:
+    0.0
+  else:
+    1.0
 
 {.pop.}
 
@@ -168,10 +210,13 @@ type
     NodeAdd, NodeMul,
     NodeNegate, NodeReciprocal,
     NodePow, NodeMod,
+    NodeLt,
     NodeSin, NodeCos, NodeTan,
     NodeArcSin, NodeArcCos, NodeArcTan,
     NodeFloor, NodeCeil, NodeAbs,
     NodeMax, NodeMin,
+    NodeCond,
+    NodeNot,
     NodeLn,
     NodeSum, NodeProd,
     NodeCall
@@ -199,10 +244,11 @@ const
     NodeSin, NodeCos, NodeTan,
     NodeArcSin, NodeArcCos, NodeArcTan,
     NodeFloor, NodeCeil, NodeAbs,
-    NodeLn
+    NodeLn,
+    NodeNot
   }
   BinaryNodes = {
-    NodePow, NodeMod
+    NodePow, NodeMod, NodeLt
   }
 
 # Node / Constructors
@@ -286,6 +332,8 @@ proc sin(x: Node): Node = Node.new(NodeSin, x)
 proc cos(x: Node): Node = Node.new(NodeCos, x)
 proc ln(x: Node): Node = Node.new(NodeLn, x)
 
+proc `not`(x: Node): Node = Node.new(NodeNot, x)
+
 proc x(_: typedesc[Node]): Node = Node(kind: NodeVar, name: "x")
 {.pop.}
 
@@ -360,8 +408,35 @@ proc derive*(node: Node, varName: string): Node =
     of NodeCos:
       let f = node.children[0]
       -sin(f) * f.derive(varName)
-    of NodeFloor, NodeCeil:
+    of NodeFloor, NodeCeil, NodeNot:
       Node.constant(0)
+    of NodeCond:
+      Node.new(NodeCond,
+        node.children[0],
+        node.children[1].derive(varName),
+        node.children[2].derive(varName)
+      )
+    of NodeAbs:
+      Node.new(NodeCond,
+        Node.new(NodeLt, node.children[0], Node.constant(0)),
+        Node.constant(-1),
+        Node.constant(1)
+      ) * node.children[0].derive(varName)
+    of NodeMax, NodeMin:
+      var canonical = node.children[0]
+      for it in 1..<node.children.len:
+        let cond =
+          if node.kind == NodeMax:
+            Node.new(NodeLt, canonical, node.children[it])
+          else:
+            Node.new(NodeLt, node.children[it], canonical)
+        
+        canonical = Node.new(NodeCond,
+          cond,
+          node.children[it],
+          canonical
+        )
+      canonical.derive(varName)
     of NodeLn:
       let f = node.children[0]
       f.derive(varName) / f
@@ -422,7 +497,6 @@ proc asInt*(value: Value[Inter]): int =
     raise newException(ValueError, "Value is not a single integer")
   result = int(value.number.min)
 
-
 proc call*[T](callee: Value[T], args: openArray[Value[T]]): Value[T] =
   if callee.kind != ValueFunction:
     raise newException(ValueError, "Unable to call " & $callee.kind)
@@ -471,6 +545,8 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
             raise newException(ValueError, "Variable \"" & node.name & "\" undefined")
           vars[node.name]
     of NaryNodes:
+      if node.kind in {NodeMin, NodeMax} and node.children.len == 0:
+        raise newException(ValueError, $node.kind & " expects at least one argument but got " & $node.children.len)
       let
         children = node.children.map(child => child.eval(vars).asNumber())
         res = case node.kind:
@@ -499,6 +575,7 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
           of NodeCeil: ceil(value)
           of NodeAbs: abs(value)
           of NodeLn: ln(value)
+          of NodeNot: not value
           else:
             raise newException(ValueError, "Unreachable")
       Value[T].initNumber(res)
@@ -511,8 +588,19 @@ proc eval*[T](node: Node, vars: Table[string, Value[T]]): Value[T] =
       case node.kind:
         of NodePow: Value[T].initNumber(pow(a, b))
         of NodeMod: Value[T].initNumber(a mod b)
+        of NodeLt: Value[T].initNumber(lt(a, b))
         else:
           raise newException(ValueError, "Unreachable")
+    of NodeCond:
+      if node.children.len != 3:
+        raise newException(ValueError, $node.kind & " expects three arguments but got " & $node.children.len)
+      
+      let
+        cond = node.children[0].eval(vars).asNumber()
+        a = node.children[1].eval(vars).asNumber()
+        b = node.children[2].eval(vars).asNumber()
+      
+      Value[T].initNumber(cond(cond, a, b))
     of NodeCall:
       let
         callee = node.children[0].eval(vars)
@@ -579,6 +667,8 @@ proc stringify(node: Node, level: int): string =
     NodeAbs: "abs",
     NodeMax: "max",
     NodeMin: "min",
+    NodeCond: "cond",
+    NodeNot: "not",
     NodeLn: "ln",
     NodeSum: "sum",
     NodeProd: "prod"
@@ -630,6 +720,7 @@ proc flatten(node: Node, kind: NodeKind): seq[Node] =
 proc toLaTeX(node: Node, level: int): string =
   const
     TOP_LEVEL = 0
+    REL_LEVEL = 3
     ADD_LEVEL = 4
     MUL_LEVEL = 5
     POW_LEVEL = 6
@@ -725,9 +816,16 @@ proc toLaTeX(node: Node, level: int): string =
       result = node.children[0].toLaTeX(MUL_LEVEL) &
                " \\mathrm{mod} " &
                node.children[0].toLaTeX(CONST_LEVEL)
+    of NodeLt:
+      maxLevel = REL_LEVEL
+      result = node.children[0].toLaTeX(REL_LEVEL + 1) &
+               " < " &
+               node.children[1].toLaTeX(REL_LEVEL + 1)
+    of NodeNot:
+      result = "\\overline{" & node.children[0].toLaTeX(TOP_LEVEL) & "}"
     of NodeSin, NodeCos, NodeTan, 
        NodeArcSin, NodeArcCos, NodeArcTan, 
-       NodeMin, NodeMax, NodeLn:
+       NodeMin, NodeMax, NodeLn, NodeCond:
       let
         name = case node.kind:
           of NodeSin: "\\sin"
@@ -739,6 +837,7 @@ proc toLaTeX(node: Node, level: int): string =
           of NodeMin: "\\min"
           of NodeMax: "\\max"
           of NodeLn: "\\ln"
+          of NodeCond: "\\mathrm{cond}"
           else: raise newException(ValueError, "Unreachable")
         args = node.children
           .map(child => child.toLaTeX(TOP_LEVEL))
@@ -969,6 +1068,8 @@ proc parse*(source: string): Node {.raises: [ValueError].} =
         of "ln": result = Node(kind: NodeLn)
         of "sum": result = Node(kind: NodeSum)
         of "prod": result = Node(kind: NodeProd)
+        of "cond": result = Node(kind: NodeCond)
+        of "not": result = Node(kind: NodeNot)
         else:
           result = Node(kind: NodeVar, name: name)
           isFunction = false
@@ -1034,6 +1135,10 @@ proc parse*(source: string): Node {.raises: [ValueError].} =
         let 
           op = stream.value
           opLevel = case op:
+            of "<": 1
+            of ">": 1
+            of "<=": 1
+            of ">=": 1
             of "+": 2
             of "-": 2
             of "*": MUL_LEVEL
@@ -1070,6 +1175,10 @@ proc parse*(source: string): Node {.raises: [ValueError].} =
             of "/": result / other
             of "^": result ^ other
             of "%": result mod other
+            of "<": Node.new(NodeLt, result, other)
+            of ">": Node.new(NodeLt, other, result)
+            of "<=": not Node.new(NodeLt, other, result)
+            of ">=": not Node.new(NodeLt, result, other)
             else: return nil
       else:
         let other = stream.parse(MUL_LEVEL + 1, allowPrefix = false)
@@ -1274,7 +1383,13 @@ when isMainModule:
   assert equals(parse("prod(1, 3, x -> x ^ 3)"), 1 * 8 * 27)
   assert equals(parse("prod(10, 10, x -> x)"), 10)
   assert equals(parse("prod(10, 9, x -> x)"), 1)
-
+  
+  # Tests / Cond
+  assert equals(parse("cond(x < 10, 2, 3)"), x => (if x < 10: 2.0 else: 3.0))
+  assert equals(parse("cond(x <= 10, 2, 3)"), x => (if x <= 10: 2.0 else: 3.0))
+  assert equals(parse("cond(x > 10, 2, 3)"), x => (if x > 10: 2.0 else: 3.0))
+  assert equals(parse("cond(x >= 10, 2, 3)"), x => (if x >= 10: 2.0 else: 3.0))
+  
   # Tests / Derive
   
   # Tests / Derive / Polynomial
@@ -1312,6 +1427,15 @@ when isMainModule:
   assert equals(parse("(x -> ((y -> y)(x)) ^ 2)'(x)"), x => 2 * x)
   assert equals(parse("(x -> ((y -> y ^ 2)(x)) * ((y -> y ^ 2)(x)))'(x)"), x => 4 * x ^ 3)
   assert equals(parse("(x -> ((y -> y ^ 2)(x)) ^ 2)'(x)"), x => 4 * x ^ 3)
+  
+  # Tests / Derive / Discontinuous
+  assert equals(parse("(x -> cond(x < 0, 0, x))'(x)"), x => (if x < 0: 0.0 else: 1.0))
+  assert equals(parse("(x -> cond(x < 0, -x, x))'(x)"), x => (if x < 0: -1.0 else: 1.0))
+  assert equals(parse("(x -> abs(x))'(x)"), x => (if x < 0: -1.0 else: 1.0))
+  assert equals(parse("(x -> max(x, -x))'(x)"), x => (if x < 0: -1.0 else: 1.0))
+  assert equals(parse("(x -> min(x, -x))'(x)"), x => (if x < 0: 1.0 else: -1.0))
+  assert equals(parse("(x -> floor(x))'(x)"), x => 0.0)
+  assert equals(parse("(x -> ceil(x))'(x)"), x => 0.0)
   
   # Tests / LaTeX
   
