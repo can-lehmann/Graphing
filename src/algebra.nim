@@ -1034,12 +1034,15 @@ proc parse*(source: string): Node {.raises: [ValueError].} =
   
   proc parse(stream: var TokenStream, level: int, allowPrefix: bool = true): Node =
     if stream.take(TokenInt):
-      result = Node.constant(stream.value.parseInt())
-      if stream.take(TokenFractional):
-        let
-          num = Node.constant(stream.value.parseInt())
-          den = Node.constant(10 ^ stream.value.len)
-        result = result + num / den
+      try:
+        result = Node.constant(stream.value.parseInt())
+        if stream.take(TokenFractional):
+          let
+            num = Node.constant(stream.value.parseInt())
+            den = Node.constant(10 ^ stream.value.len)
+          result = result + num / den
+      except ValueError as err:
+        return nil
     elif stream.take(TokenName):
       let name = stream.value
       var isFunction = true
