@@ -197,9 +197,13 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE."""
   
-  BACKGROUND_COLOR = Color.rgb(0xffffff)
-  GRID_COLOR = Color.rgb(0xdeddda)
-  AXIS_COLOR = Color.rgb(0x000000)
+  LIGHT_BACKGROUND_COLOR = Color.rgb(0xffffff)
+  LIGHT_GRID_COLOR = Color.rgb(0xdeddda)
+  LIGHT_AXIS_COLOR = Color.rgb(0x000000)
+  
+  DARK_BACKGROUND_COLOR = Color.rgb(0x202020)
+  DARK_GRID_COLOR = Color.rgb(0x404040)
+  DARK_AXIS_COLOR = Color.rgb(0xffffff)
   
   GRID_WIDTH = 2.0
   AXIS_WIDTH = 2.0
@@ -607,14 +611,19 @@ type Grid = ref object
   gridColor: Color
   axisColor: Color
 
-proc new(_: typedesc[Grid]): Grid =
+proc new(_: typedesc[Grid], dark: bool = false): Grid =
   result = Grid(
     showGrid: true,
-    showAxes: true,
-    backgroundColor: BACKGROUND_COLOR,
-    gridColor: GRID_COLOR,
-    axisColor: AXIS_COLOR
+    showAxes: true
   )
+  if dark:
+    result.backgroundColor = DARK_BACKGROUND_COLOR
+    result.gridColor = DARK_GRID_COLOR
+    result.axisColor = DARK_AXIS_COLOR
+  else:
+    result.backgroundColor = LIGHT_BACKGROUND_COLOR
+    result.gridColor = LIGHT_GRID_COLOR
+    result.axisColor = LIGHT_AXIS_COLOR
 
 proc guessGridSize(view: Viewport): tuple[precision: int, size: Vec2] =
   const EPS = 0.000000001
@@ -937,7 +946,7 @@ method view(preferences: GridPreferencesState): Widget =
 viewable ExportDialog:
   project: Project
   viewport: Viewport
-  grid: Grid = Grid.new()
+  grid: Grid = Grid.new(defaultStyleManager().dark)
 
 proc renderPixbuf(dialog: ExportDialogState): Pixbuf =
   let view = dialog.viewport
@@ -1247,7 +1256,7 @@ method view(menu: ViewMenuState): Widget =
 
 viewable App:
   project: Project = Project.new()
-  grid: Grid = Grid.new()
+  grid: Grid = Grid.new(defaultStyleManager().dark)
   viewport: Viewport = Viewport(height: 10.0)
   displayOptions: DisplayOptions = DisplayOptions()
 
@@ -1269,7 +1278,7 @@ method view(app: AppState): Widget =
               title = APP_NAME
               
               if app.project.path.len == 0:
-                subtitle = $app.project.graphs.len & " graphs"
+                subtitle = $app.project.graphs.len & " Graphs"
               else:
                 subtitle = $app.project.path
             
