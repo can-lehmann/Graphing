@@ -1,1 +1,1 @@
---d:"adwminor=2"
+--d:"adwminor=4"

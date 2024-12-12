@@ -463,7 +463,7 @@ proc derive*(node: Node, varName: string): Node =
 # Node / Evaluate
 
 type
-  ValueKind = enum
+  ValueKind* = enum
     ValueNumber, ValueFunction, ValueTuple
   
   Closure*[T] = ref object
