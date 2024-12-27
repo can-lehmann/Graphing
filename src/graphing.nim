@@ -1081,6 +1081,10 @@ method view(menu: AppMenuState): Widget =
                 gui:
                   FileChooserDialog:
                     action = FileChooserOpen
+                    filters = @[
+                      newFileFilter("Graphing Files", mimeTypes = ["application/json"]),
+                      newFileFilter("All Files", patterns = ["*"])
+                    ]
                     
                     DialogButton {.addButton.}:
                       text = "Open"
@@ -1116,6 +1120,10 @@ method view(menu: AppMenuState): Widget =
                 gui:
                   FileChooserDialog:
                     action = FileChooserSave
+                    filters = @[
+                      newFileFilter("Graphing Files", mimeTypes = ["application/json"]),
+                      newFileFilter("All Files", patterns = ["*"])
+                    ]
                     
                     DialogButton {.addButton.}:
                       text = "Save"
